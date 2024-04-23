@@ -31,7 +31,7 @@
     "get-port": "^5.1.1",
     "isobject": "^4.0.0",
     "jpeg-extract": "^3.0.1",
-    "pubnub": "^7.2.0",
+    "pubnub": "^8.0.0",
     "request": "^2.88.2",
     "request-promise-native": "^1.0.9"
   },
