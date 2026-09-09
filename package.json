@@ -1,6 +1,6 @@
 {
   "name": "@balansse/homebridge-vivint",
-  "version": "1.11.1",
+  "version": "1.11.2",
   "description": "Control Vivint with HomeBridge",
   "license": "ISC",
   "author": "Alexandr Balan <balansse@gmail.com>",
@@ -24,13 +24,13 @@
     "url": "http://github.com/balansse/homebridge-vivint/issues"
   },
   "engines": {
-    "node": ">=10",
+    "node": ">=22",
     "homebridge": ">=1.0.0 || ^2.0.0-beta.0"
   },
   "dependencies": {
     "@homebridge/plugin-ui-utils": "0.0.19",
     "debounce-promise": "^3.1.2",
-    "ffmpeg-for-homebridge": "^0.1.4",
+    "ffmpeg-for-homebridge": "2.2.2",
     "get-port": "^5.1.1",
     "isobject": "^4.0.0",
     "jpeg-extract": "^3.0.1",
