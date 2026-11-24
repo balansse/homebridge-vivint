@@ -1,6 +1,6 @@
 {
   "name": "@balansse/homebridge-vivint",
-  "version": "1.12.1",
+  "version": "1.12.2",
   "description": "Control Vivint with HomeBridge",
   "license": "ISC",
   "author": "Alexandr Balan <balansse@gmail.com>",
@@ -54,10 +54,15 @@
     }
   ],
   "main": "index.js",
-  "directories": {
-    "lib": "lib",
-    "test": "test"
-  },
+  "files": [
+    "index.js",
+    "lib/",
+    "!lib/homebridge-ui/",
+    "dist/",
+    "config.schema.json",
+    "scripts/vivint_mfa_cli.js",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "test": "mocha",
     "mfa": "node scripts/vivint_mfa_cli",
