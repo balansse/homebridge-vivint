@@ -63,6 +63,11 @@ cd /var/lib/hoobs/vivintbridge/node_modules/@balansse/homebridge-vivint
 npm run mfa
 ```
 
+### Trying beta versions
+New versions are sometimes released as betas first (e.g. `1.13.0-beta.0`). Betas are never installed automatically and Homebridge will not prompt you to update to them.
+To try one, open the plugin in the Homebridge UI, choose **Install Alternate Version** and pick the beta, or run `npm i @balansse/homebridge-vivint@beta`.
+To go back, install the latest regular version the same way. Please report problems in [Issues](https://github.com/balansse/homebridge-vivint/issues).
+
 ## Supported Items
 
 Currently, the following items are supported:

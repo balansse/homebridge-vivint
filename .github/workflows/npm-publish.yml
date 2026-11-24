@@ -2,21 +2,71 @@
 # No long-lived NPM token is used; provenance attestations are generated automatically.
 # Requires a trusted publisher configured on npmjs.com for this repo/workflow/environment.
 # Releases are *staged*: approve them at npmjs.com (or `npm stage approve <id>`) with 2FA to go live.
+#
+# Beta releases: set a prerelease version in package.json (e.g. 1.13.0-beta.0) and run this
+# workflow with tag "beta". Users only get it if they opt in (@beta / "Install Alternate Version");
+# `latest` and Homebridge's update prompt are unaffected.
 
 name: Node.js Package
 
-on: [workflow_dispatch]
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'npm dist-tag: "latest" for normal releases, "beta" for prerelease versions like 1.13.0-beta.0'
+        type: choice
+        options: [latest, beta]
+        default: latest
 
 permissions:
   contents: read
 
 jobs:
+  # Fail fast if the version and tag don't match, so a beta can never land on `latest` (or vice versa)
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check version, tag and registry
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          echo "Publishing $NAME@$VERSION with tag '$TAG'"
+          case "$VERSION" in
+            *-*) PRERELEASE=true ;;
+            *)   PRERELEASE=false ;;
+          esac
+          if [ "$TAG" = "latest" ] && [ "$PRERELEASE" = "true" ]; then
+            echo "::error::$VERSION is a prerelease version; run the workflow with tag 'beta'."
+            exit 1
+          fi
+          if [ "$TAG" != "latest" ] && [ "$PRERELEASE" = "false" ]; then
+            echo "::error::Tag '$TAG' needs a prerelease version (e.g. ${VERSION}-beta.0); '$VERSION' would look like a stable release."
+            exit 1
+          fi
+          if [ "$(npm view "$NAME@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+            echo "::error::$NAME@$VERSION is already published on npm; bump the version first."
+            exit 1
+          fi
+          {
+            echo "### Releasing \`$NAME@$VERSION\` as \`$TAG\`"
+            echo "After this run, approve the staged version on npmjs.com (2FA)."
+            if [ "$TAG" != "latest" ]; then
+              echo ""
+              echo "Testers install it with \`npm i $NAME@$TAG\` or via *Install Alternate Version* in the Homebridge UI."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Full CI (lint, unit, config UI, packed plugin in Homebridge 1.x/2.x) must pass before publishing
   test:
     uses: ./.github/workflows/ci.yml
 
   publish-npm:
-    needs: test
+    needs: [check-version, test]
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     environment: prod
@@ -36,4 +86,6 @@ jobs:
       # npm ci runs the "prepare" script, which builds the config UI into dist/
       - run: npm ci
       # The trusted publisher only allows `npm stage publish`; a maintainer approves with 2FA
-      - run: npm stage publish --access public
+      - run: npm stage publish --access public --tag "$TAG"
+        env:
+          TAG: ${{ inputs.tag }}
