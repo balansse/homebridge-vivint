@@ -376,6 +376,50 @@ describe('DeviceSet', function () {
         Characteristic.SecuritySystemCurrentState.STAY_ARM)
     })
 
+    describe('numeric lock states (#121)', function () {
+      const S = Characteristic.LockCurrentState
+      const T = Characteristic.LockTargetState
+      const patch = (deviceSet, status) => deviceSet.handleMessage(deviceUpdate([{ Id: 24, Status: status }], laterTs))
+      const current = (deviceSet) => deviceSet.devicesById[24].service.valueOf(S)
+      const target = (deviceSet) => deviceSet.devicesById[24].service.valueOf(T)
+
+      for (const [status, expected, name] of [[0, 0, 'UNSECURED'], [1, 1, 'SECURED'], [255, 1, 'SECURED'], [false, 0, 'UNSECURED'], [true, 1, 'SECURED']]) {
+        it(`maps status ${JSON.stringify(status)} to ${name} and moves the target state`, function () {
+          const deviceSet = build([panelData(), { ...doorLockData(), Status: expected === 1 ? false : true }])
+          patch(deviceSet, status)
+          assert.strictEqual(current(deviceSet), expected)
+          assert.strictEqual(target(deviceSet), expected)
+        })
+      }
+
+      it('reads a numeric status from the snapshot', function () {
+        assert.strictEqual(current(build([panelData(), { ...doorLockData(), Status: 0 }])), S.UNSECURED)
+        assert.strictEqual(current(build([panelData(), { ...doorLockData(), Status: 255 }])), S.SECURED)
+      })
+
+      it('shows other numbers as UNKNOWN (never guesses secured), keeps the target, and reports each value once', function () {
+        const lines = []
+        const log = Object.assign(() => {}, { debug() {}, info: (...a) => lines.push(a.join(' ')), warn() {}, error() {} })
+        DeviceSet = DeviceSetModule({}, log, MockHomebridge, mockVivintApi)
+        const deviceSet = new DeviceSet()
+        const data = doorLockData()
+        deviceSet.bindAccessory(DeviceSet.createDeviceAccessory(data), data)
+        deviceSet.handleSnapshot({ Status: VivintDict.SecurityState.DISARMED, Devices: [data] }, snapshotTs)
+        assert.strictEqual(target(deviceSet), T.SECURED)
+
+        for (const status of [16, 254, 16, 'locked', 254]) {
+          patch(deviceSet, status)
+          assert.strictEqual(current(deviceSet), S.UNKNOWN, `status ${JSON.stringify(status)}`)
+          assert.strictEqual(target(deviceSet), T.SECURED, 'target unchanged')
+        }
+        assert.deepStrictEqual(lines.map((l) => /unrecognized state (\S+);/.exec(l)[1]), ['16', '254', '"locked"'])
+        assert.ok(lines.every((l) => l.includes("Lock 'Front Door'") && l.includes('issues/121')))
+
+        patch(deviceSet, 0)
+        assert.strictEqual(current(deviceSet), S.UNSECURED)
+      })
+    })
+
     it('marks a lock as jammed from a "failed to lock" inbox message', function () {
       const deviceSet = build([panelData(), doorLockData()])
       deviceSet.handleMessage({

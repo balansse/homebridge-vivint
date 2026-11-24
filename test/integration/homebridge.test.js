@@ -369,6 +369,23 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       await waitFor(async () => (await hap.get(smoke)).value === 0, { message: 'smoke cleared' })
     })
 
+    it('handles numeric lock states from Z-Wave locks (#121)', async function () {
+      const current = await hap.find('Front Door', T.LockMechanism, T.LockCurrentState)
+      const target = await hap.find('Front Door', T.LockMechanism, T.LockTargetState)
+      push([{ _id: 24, s: 0 }])
+      await waitFor(async () => (await hap.get(current)).value === 0, { message: 'lock UNSECURED from s:0' })
+      assert.strictEqual((await hap.get(target)).value, 0)
+      push([{ _id: 24, s: 255 }])
+      await waitFor(async () => (await hap.get(current)).value === 1, { message: 'lock SECURED from s:255' })
+      assert.strictEqual((await hap.get(target)).value, 1)
+      push([{ _id: 24, s: 254 }])
+      await waitFor(async () => (await hap.get(current)).value === 3, { message: 'lock UNKNOWN from s:254' })
+      assert.strictEqual((await hap.get(target)).value, 1, 'target kept')
+      assert.match(hb.log, /Lock 'Front Door' reported an unrecognized state 254; showing it as unknown/)
+      push([{ _id: 24, s: true }])
+      await waitFor(async () => (await hap.get(current)).value === 1, { message: 'lock SECURED again' })
+    })
+
     it('marks a lock jammed from an inbox alert', async function () {
       const ref = await hap.find('Front Door', T.LockMechanism, T.LockCurrentState)
       mock.pushPubNub({ _id: 'msg1', t: 'inbox_message', da: { sub: 'Alert: Front Door failed to lock' } })
