@@ -1,5 +1,10 @@
 ## Unreleased
+### Changes
+- Accounts with several Vivint systems: the log lists every system on startup, and the new `panelId` setting picks which one to use (default: the first, as before). Changing it replaces the accessories of the previous system (#133).
+
 ### Fixes
+- On accounts with several systems, real-time updates from another system no longer change this system's accessories when device IDs overlap (#133).
+- Clearer diagnostics: an HTTP 403 from Vivint is reported as a Cloudflare block ("try again later or from another network") instead of a wrong password (#107); accounts that only have a `smarthomesystem` are reported as not supported yet instead of "No Vivint system found" (#82); Nest entries no longer show up as "Device not (yet) supported" (#176); network errors with an empty message (such as a failed connection to every address of a host) are logged as a readable one-line reason (#151, #173).
 - Locks that report their state as a number (0 = unlocked; 1 or 255 = locked) no longer stay stuck as unknown / "Locking…" in HomeKit. Any other value is still shown as unknown, and the raw value is logged once so it can be added (#121).
 - Combo smoke/CO detectors (equipment codes 4040/4050) now appear as Smoke and Carbon Monoxide sensors, and PIR3 motion sensors (4020) as motion sensors, instead of contact sensors (#144, #172). **These accessories are re-created once after updating: re-assign their room and any automations in the Home app.**
 - Real-time updates (motion, doorbell, camera events) no longer stop for good after a network or PubNub outage. The plugin now reconnects with backoff after PubNub gives up retrying, and resubscribes if the stream has been silent for an hour. It logs one line when the connection is lost and one when it is restored (#172).

@@ -218,6 +218,16 @@ describe('DeviceSet', function () {
       assert.strictEqual(DeviceSet.createDeviceAccessory({ Id: 8, Type: 'keyfob_device', Name: 'Fob' }), null)
     })
 
+    it('ignores Nest entries quietly instead of logging them as unsupported (#176)', function () {
+      const lines = []
+      const log = Object.assign(() => {}, { debug() {}, info: (...a) => lines.push(a.join(' ')), warn() {}, error() {} })
+      DeviceSet = DeviceSetModule({}, log, MockHomebridge, mockVivintApi)
+      assert.strictEqual(DeviceSet.createDeviceAccessory({ Id: 85, Type: 'nest' }), null)
+      assert.strictEqual(DeviceSet.createDeviceAccessory({ Id: 86, Type: 'hvac_control' }), null)
+      assert.strictEqual(DeviceSet.createDeviceAccessory({ Id: 7, Type: 'some_future_device', Name: 'X' }), null)
+      assert.deepStrictEqual(lines.map((l) => /\[ID\]:(\d+)/.exec(l)[1]), ['7'], 'only the unknown type is reported')
+    })
+
     it('honours ignoreDeviceTypes by type, equipment code and id', function () {
       for (const ignored of [VivintDict.PanelDeviceType.WirelessSensor, `${VivintDict.EquipmentCode.DW10_THIN_DOOR_WINDOW}`, '42']) {
         DeviceSet = DeviceSetModule({ ignoreDeviceTypes: [ignored] }, silentLog, MockHomebridge, mockVivintApi)
@@ -417,6 +427,36 @@ describe('DeviceSet', function () {
 
         patch(deviceSet, 0)
         assert.strictEqual(current(deviceSet), S.UNSECURED)
+      })
+    })
+
+    describe('with several systems on the account (#133)', function () {
+      it('ignores updates for another panel even when device ids overlap', function () {
+        const deviceSet = build([panelData(), windowSensorData()])
+        deviceSet.handleMessage({ ...deviceUpdate([{ Id: 42, Status: true }], laterTs), PanelId: 14 })
+        assert.strictEqual(contactState(deviceSet.devicesById[42]), Characteristic.ContactSensorState.CONTACT_DETECTED)
+      })
+
+      it('ignores security status updates for another panel', function () {
+        const deviceSet = build([panelData()])
+        deviceSet.handleMessage({ Id: 14, PanelId: 14, Data: { PlatformContext: { Timestamp: laterTs }, Status: VivintDict.SecurityState.ARMED_STAY } })
+        assert.strictEqual(deviceSet.devicesById[PANEL_ID].service.valueOf(Characteristic.SecuritySystemCurrentState),
+          Characteristic.SecuritySystemCurrentState.DISARMED)
+      })
+
+      it('applies updates for our panel (number or string id) and messages without a panel id', function () {
+        const deviceSet = build([panelData(), windowSensorData(), doorSensorData()])
+        deviceSet.handleMessage({ ...deviceUpdate([{ Id: 42, Status: true }], laterTs), PanelId: mockVivintApi.panelId })
+        assert.strictEqual(contactState(deviceSet.devicesById[42]), Characteristic.ContactSensorState.CONTACT_NOT_DETECTED)
+        deviceSet.handleMessage({ ...deviceUpdate([{ Id: 28, Status: true }], laterTs), PanelId: `${mockVivintApi.panelId}` })
+        assert.strictEqual(contactState(deviceSet.devicesById[28]), Characteristic.ContactSensorState.CONTACT_NOT_DETECTED)
+        deviceSet.handleMessage(deviceUpdate([{ Id: 42, Status: false }], laterTs))
+        assert.strictEqual(contactState(deviceSet.devicesById[42]), Characteristic.ContactSensorState.CONTACT_DETECTED)
+      })
+
+      it('records the panel id on new accessories', function () {
+        DeviceSet = DeviceSetModule({}, silentLog, MockHomebridge, mockVivintApi)
+        assert.strictEqual(DeviceSet.createDeviceAccessory(windowSensorData()).context.panelId, mockVivintApi.panelId)
       })
     })
 

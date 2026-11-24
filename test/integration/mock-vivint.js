@@ -44,6 +44,17 @@ function devices() {
   ]
 }
 
+// A second system on the same account (#133). Device ids are panel-local and overlap with the first system's.
+const SECOND_PANEL_ID = 14
+const SECOND_PARTITION_ID = 2
+function secondSystemDevices() {
+  return [
+    { _id: 1, t: 'primary_touch_link_device', n: 'Cabin Panel' },
+    { _id: 42, t: 'wireless_sensor', ec: 862, n: 'Cabin Window', s: false },
+    { _id: 24, t: 'door_lock_device', n: 'Cabin Door', s: false, bl: 90 },
+  ]
+}
+
 function systemInfo(securityStatus = 0, deviceOverrides = {}) {
   const d = devices().map((dev) => ({ ...dev, ...deviceOverrides[dev._id] }))
   return {
@@ -199,12 +210,18 @@ class MockVivint {
       const cookie = req.headers.cookie || ''
       if (cookie === SENTINELS.loginCookie && this.mfaRequired && !this.mfaValidated) return json(401, { msg: 'mfa required' })
       if (!cookie.includes('SENTINEL_')) return json(401, { msg: 'unauthorized' })
-      return json(200, { u: { mbc: CHANNEL, system: [{ panid: PANEL_ID, n: 'Home' }] } }, {
+      return json(200, { u: { mbc: CHANNEL, system: [{ panid: PANEL_ID, sn: 'Home' }, { panid: SECOND_PANEL_ID, sn: 'Cabin' }] } }, {
         'set-cookie': [`${SENTINELS.rotatedToken}; Path=/; HttpOnly; Secure`, 'other=1; Path=/'],
       })
     }
     if (req.method === 'GET' && p === `/api/systems/${PANEL_ID}`) return json(200, systemInfo(this.securityStatus, this.deviceOverrides))
-    if (req.method === 'GET' && p === `/api/panel-login/${PANEL_ID}`) return json(200, { n: SENTINELS.panelUser, pswd: SENTINELS.panelPassword })
+    if (req.method === 'GET' && p === `/api/systems/${SECOND_PANEL_ID}`) {
+      return json(200, { system: { panid: SECOND_PANEL_ID, pnlctx: { ts: SNAPSHOT_TS }, par: [{ parid: SECOND_PARTITION_ID, s: 0, d: secondSystemDevices() }] } })
+    }
+    if (req.method === 'GET' && (p === `/api/panel-login/${PANEL_ID}` || p === `/api/panel-login/${SECOND_PANEL_ID}`)) {
+      return json(200, { n: SENTINELS.panelUser, pswd: SENTINELS.panelPassword })
+    }
+    if (req.method === 'PUT' && p.startsWith(`/api/${SECOND_PANEL_ID}/${SECOND_PARTITION_ID}/`)) return json(200, undefined)
     if (req.method === 'PUT' && p.startsWith(`/api/${PANEL_ID}/${PARTITION_ID}/`)) {
       if (p.endsWith('/armedstates')) {
         try { this.securityStatus = JSON.parse(body.toString()).armState } catch (_) {}
@@ -239,4 +256,4 @@ class MockVivint {
   }
 }
 
-module.exports = { MockVivint, SENTINELS, PANEL_ID, PARTITION_ID, CHANNEL, SNAPSHOT_TS }
+module.exports = { MockVivint, SENTINELS, PANEL_ID, PARTITION_ID, SECOND_PANEL_ID, SECOND_PARTITION_ID, CHANNEL, SNAPSHOT_TS }

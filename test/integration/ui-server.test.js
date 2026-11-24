@@ -79,6 +79,21 @@ function makeCert(dir) {
     assert.match(res.data.message, /Check your email and password/)
   })
 
+  it('explains an HTTP 403 (Cloudflare block) instead of blaming the password (#107)', async function () {
+    const blocked = /Vivint\/Cloudflare blocked this request \(HTTP 403\)\. Try again later or from another network\./
+    mock.override((r) => r.method === 'POST' && r.path === '/api/login', { status: 403, body: 'error code: 1020' })
+    const login = await call('/send-code', { email: 'user@example.com', password: SENTINELS.userPassword })
+    assert.strictEqual(login.success, false)
+    assert.match(login.data.message, blocked)
+    assert.doesNotMatch(login.data.message, /password/)
+
+    mock.override((r) => r.method === 'GET' && r.path === '/api/authuser', { status: 403, body: 'error code: 1020' })
+    const authuser = await call('/send-code', { email: 'user@example.com', password: SENTINELS.userPassword })
+    assert.strictEqual(authuser.success, false)
+    assert.match(authuser.data.message, blocked)
+    mock.clearOverrides()
+  })
+
   it('returns the refresh token directly when 2FA is not enabled', async function () {
     mock.mfaRequired = false
     const res = await call('/send-code', { email: 'user@example.com', password: SENTINELS.userPassword })
