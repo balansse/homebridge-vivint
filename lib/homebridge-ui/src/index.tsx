@@ -1,7 +1,7 @@
-import ReactDOM from 'react-dom'
+import { createRoot } from 'react-dom/client'
 import CustomConfigUi from './CustomConfigUi'
-import '@homebridge/plugin-ui-utils/dist/ui.interface'
+import '@homebridge/plugin-ui-utils/ui.interface'
 
 window.homebridge.addEventListener('ready', () => {
-  ReactDOM.render(<CustomConfigUi />, document.getElementById('root'))
+  createRoot(document.getElementById('root')!).render(<CustomConfigUi />)
 })
