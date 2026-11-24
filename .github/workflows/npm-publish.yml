@@ -1,6 +1,7 @@
 # Publishes @balansse/homebridge-vivint to npm using npm Trusted Publishing (OIDC).
 # No long-lived NPM token is used; provenance attestations are generated automatically.
 # Requires a trusted publisher configured on npmjs.com for this repo/workflow/environment.
+# Releases are *staged*: approve them at npmjs.com (or `npm stage approve <id>`) with 2FA to go live.
 
 name: Node.js Package
 
@@ -45,4 +46,5 @@ jobs:
       - run: npm --version
       # npm ci runs the "prepare" script, which builds the config UI into dist/
       - run: npm ci
-      - run: npm publish --access public
+      # The trusted publisher only allows `npm stage publish`; a maintainer approves with 2FA
+      - run: npm stage publish --access public
