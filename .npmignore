@@ -1,6 +1,0 @@
-node_modules
-accessories/
-persist/
-*.tgz
-scratch/
-lib/homebridge-ui
