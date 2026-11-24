@@ -1,20 +1,20 @@
-var Accessory, Service, Characteristic, UUIDGen;
+var Service;
 
 const PluginName = "homebridge-vivint"
 const PlatformName = "Vivint"
 const VivintApiModule = require("./lib/vivint_api.js")
 const DeviceSetModule = require("./lib/device_set.js")
+const { describeError } = require("./lib/http.js")
 
 module.exports = function (homebridge) {
-  Accessory = homebridge.platformAccessory;
   Service = homebridge.hap.Service;
-  Characteristic = homebridge.hap.Characteristic;
-  UUIDGen = homebridge.hap.uuid;
 
+  // Make every characteristic of the given accessories report an error, so HomeKit shows
+  // "No Response" instead of stale values when the platform could not start.
   function setCatastrophe(accessories) {
     accessories.forEach((accessory) => {
       accessory.services
-      .filter((service) => service.UUID != Service.AccessoryInformation)
+      .filter((service) => service.UUID !== Service.AccessoryInformation.UUID)
       .forEach((service) => {
         service.characteristics.forEach((characteristic) => {
           characteristic.on('get', (next) => {
@@ -28,104 +28,160 @@ module.exports = function (homebridge) {
   class VivintPlatform {
     constructor(log, config, api) {
       this.log = log
-      this.config = config
+      this.config = config || {}
       this.api = api
       this.cachedAccessories = []
+      this.timers = []
+      this.pubNub = null
+      this.deviceSet = null
+
+      if (!config || !config.refreshToken) {
+        log.error("No refresh token configured. Open the plugin settings to log in to Vivint and generate one.")
+        return
+      }
 
       let config_apiLoginRefreshSecs = config.apiLoginRefreshSecs || 1200 // once per 20 minutes default
 
       let VivintApi = VivintApiModule(config, log)
+      // Start logging in right away; bootstrapping waits until cached accessories are restored.
       this.vivintApiPromise = VivintApi.login({refreshToken: config.refreshToken})
-      
-      this.pubNubPromise = this.vivintApiPromise
-        .then((vivintApi) => vivintApi.connectPubNub())
+      // Avoid an unhandled rejection before didFinishLaunching attaches its handlers
+      this.vivintApiPromise.catch(() => {})
 
-      this.initialLoad = 
-          Promise.all([this.vivintApiPromise, this.pubNubPromise, this.cachedAccessories])
-          .then(
-            ([vivintApi, pubNub, cachedAccessories]) => {
-              let DeviceSet = DeviceSetModule(config, log, homebridge, vivintApi)
-              let deviceSet = new DeviceSet()
+      const launched = new Promise((resolve) => api.on('didFinishLaunching', resolve))
 
-              this.log.debug(JSON.stringify(vivintApi.deviceSnapshot(), undefined, 4))
+      this.initialLoad = launched
+        .then(() => this.vivintApiPromise)
+        .then(async (vivintApi) => {
+          let pubNub = await vivintApi.connectPubNub()
+          this.pubNub = pubNub
+          this.bootstrap(vivintApi, pubNub, config_apiLoginRefreshSecs)
+        })
+        .catch((error) => {
+          if (error instanceof VivintApiModule.VivintAuthError) {
+            log.error(error.message)
+          } else {
+            log.error("Error while bootstrapping accessories:", describeError(error))
+          }
+          setCatastrophe(this.cachedAccessories)
+        })
 
-              let snapshotDevices = vivintApi.deviceSnapshot().Devices
-              let snapshotAccessories = snapshotDevices
-                  .filter((data) => data.Id)
-                  .map((deviceData) => DeviceSet.createDeviceAccessory(deviceData))
-                  .filter((dvc) => dvc)
-    
-              //Remove stale/ignored accessories                  
-              let removedAccessories = cachedAccessories
-                  .filter((acc) => !snapshotAccessories.some((snap_acc) => snap_acc.context.id === acc.context.id))
-              //Remove accessories that are handled differently (and previously enabled cameras if disabled now)
-              let changedAccessories = cachedAccessories
-                  .filter((acc) => snapshotAccessories.some((snap_acc) => snap_acc.context.id === acc.context.id && snap_acc.context.deviceClassName !== acc.context.deviceClassName || config.disableCameras && acc.getService(Service.CameraRTPStreamManagement)))
-              let removedAndChangedAccessories = removedAccessories.concat(changedAccessories)
-              log.info(`Removing ${removedAndChangedAccessories.length} accessories`)
-              api.unregisterPlatformAccessories(PluginName, PlatformName, removedAndChangedAccessories)
+      api.on('shutdown', () => this.shutdown())
+    }
 
-              //Adding new accessories
-              let newAccessories = snapshotAccessories
-                  .filter((acc) => !cachedAccessories.some((cached_acc) => cached_acc.context.id === acc.context.id) || changedAccessories.some((changed_acc) => changed_acc.context.id === acc.context.id))
-              log.info(`Adding ${newAccessories.length} accessories`)
-              api.registerPlatformAccessories(PluginName, PlatformName, newAccessories)
-    
-              cachedAccessories = cachedAccessories.filter((el) => !removedAccessories.includes(el));
+    bootstrap(vivintApi, pubNub, config_apiLoginRefreshSecs) {
+      const log = this.log
+      const config = this.config
+      const api = this.api
 
-              cachedAccessories.forEach((accessory) => { 
-                let data = snapshotDevices.find((snap_device) => snap_device.Id === accessory.context.id)
-                deviceSet.bindAccessory(accessory, data) 
-              })
+      let DeviceSet = DeviceSetModule(config, log, homebridge, vivintApi)
+      let deviceSet = new DeviceSet()
+      this.deviceSet = deviceSet
+      let cachedAccessories = this.cachedAccessories
 
-              newAccessories.forEach((accessory) => { 
-                let data = snapshotDevices.find((snap_device) => snap_device.Id === accessory.context.id)
-                deviceSet.bindAccessory(accessory, data) 
-              })
-    
-              pubNub.addListener({
-                status: function(statusEvent) {
-                  switch(statusEvent.category){
-                    case 'PNConnectedCategory':
-                      log.debug("Connected to Pubnub")
-                      break
-                    case 'PNReconnectedCategory':
-                      log.warn("Reconnected to Pubnub")
-                      break
-                    default:
-                      log.warn("Could not connect to Pubnub, reconnecting...")
-                      log.error(statusEvent)
-                  }
-                },
-                message: function(msg) {
-                  log.debug("Parsed PubNub message:", JSON.stringify(vivintApi.parsePubNub(msg.message), undefined, 4))
-                  deviceSet.handleMessage(vivintApi.parsePubNub(msg.message))
-                }
-              })
-              deviceSet.handleSnapshot(vivintApi.deviceSnapshot(), vivintApi.deviceSnapshotTs())
+      log.debug(JSON.stringify(vivintApi.deviceSnapshot(), undefined, 4))
 
-              //Refreshing the token
-              setInterval(() => {
-                vivintApi.renew()
-                  .then((vivintApi) => vivintApi.renewPanelLogin())
-                  .catch((err) => log.error("Error refreshing login info:", err))
-              }, config_apiLoginRefreshSecs * 1000)
-
-              //Setting up the system info refresh to keep the notification stream active
-              setInterval(() => {
-                  vivintApi.renewSystemInfo()
-                    .then((vivintApi) => deviceSet.handleSnapshot(vivintApi.deviceSnapshot(), vivintApi.deviceSnapshotTs()))
-                    .catch((err) => log.error("Error getting system info:", err))
-              }, (config_apiLoginRefreshSecs / 20) * 1000)
+      let snapshotDevices = vivintApi.deviceSnapshot().Devices || []
+      let snapshotAccessories = snapshotDevices
+          .filter((data) => data.Id)
+          .map((deviceData) => {
+            try {
+              return DeviceSet.createDeviceAccessory(deviceData)
+            } catch (err) {
+              log.error(`Skipping device [ID]:${deviceData.Id} [Type]:${deviceData.Type} [Name]:${deviceData.Name} - could not create accessory:`, describeError(err))
+              return null
             }
-          ).catch((error) => {
-            log.error("Error while bootstrapping accessories:", error)
-            Promise.all(this.cachedAccessories).then(setCatastrophe)
           })
+          .filter((dvc) => dvc)
 
-      api.on('didFinishLaunching', () => { 
-        return this.initialLoad
+      //Remove stale/ignored accessories
+      let removedAccessories = cachedAccessories
+          .filter((acc) => !snapshotAccessories.some((snap_acc) => snap_acc.context.id === acc.context.id))
+      //Remove accessories that are handled differently (and previously enabled cameras if disabled now)
+      let changedAccessories = cachedAccessories
+          .filter((acc) => snapshotAccessories.some((snap_acc) => snap_acc.context.id === acc.context.id && snap_acc.context.deviceClassName !== acc.context.deviceClassName || config.disableCameras && acc.getService(Service.CameraRTPStreamManagement)))
+      let removedAndChangedAccessories = removedAccessories.concat(changedAccessories)
+      log.info(`Removing ${removedAndChangedAccessories.length} accessories`)
+      api.unregisterPlatformAccessories(PluginName, PlatformName, removedAndChangedAccessories)
+
+      //Adding new accessories
+      let newAccessories = snapshotAccessories
+          .filter((acc) => !cachedAccessories.some((cached_acc) => cached_acc.context.id === acc.context.id) || changedAccessories.some((changed_acc) => changed_acc.context.id === acc.context.id))
+      log.info(`Adding ${newAccessories.length} accessories`)
+      api.registerPlatformAccessories(PluginName, PlatformName, newAccessories)
+
+      let keptAccessories = cachedAccessories.filter((el) => !removedAndChangedAccessories.includes(el))
+
+      keptAccessories.concat(newAccessories).forEach((accessory) => {
+        let data = snapshotDevices.find((snap_device) => snap_device.Id === accessory.context.id)
+        try {
+          deviceSet.bindAccessory(accessory, data)
+        } catch (err) {
+          log.error(`Could not set up accessory '${accessory.displayName}':`, describeError(err))
+          setCatastrophe([accessory])
+        }
       })
+
+      pubNub.addListener({
+        status: (statusEvent) => {
+          switch(statusEvent.category){
+            case 'PNConnectedCategory':
+              log.debug("Connected to PubNub")
+              break
+            case 'PNReconnectedCategory':
+              log.info("Reconnected to PubNub")
+              break
+            case 'PNNetworkDownCategory':
+            case 'PNNetworkIssuesCategory':
+            case 'PNDisconnectedUnexpectedlyCategory':
+            case 'PNConnectionErrorCategory':
+            case 'PNTimeoutCategory':
+              log.warn(`PubNub connection problem (${statusEvent.category}), reconnecting...`)
+              break
+            default:
+              log.debug(`PubNub status: ${statusEvent.category}`)
+          }
+        },
+        message: (msg) => {
+          // A single malformed message must never break the real-time update stream
+          try {
+            let parsed = vivintApi.parsePubNub(msg.message)
+            log.debug("Parsed PubNub message:", JSON.stringify(parsed, undefined, 4))
+            deviceSet.handleMessage(parsed)
+          } catch (err) {
+            log.warn("Ignoring PubNub message that could not be processed:", describeError(err))
+          }
+        }
+      })
+      deviceSet.handleSnapshot(vivintApi.deviceSnapshot(), vivintApi.deviceSnapshotTs())
+
+      //Refreshing the token
+      this.timers.push(setInterval(() => {
+        vivintApi.renew()
+          .then((vivintApi) => vivintApi.renewPanelLogin())
+          .catch((err) => log.error("Error refreshing login info:", describeError(err)))
+      }, config_apiLoginRefreshSecs * 1000))
+
+      //Setting up the system info refresh to keep the notification stream active
+      this.timers.push(setInterval(() => {
+          vivintApi.renewSystemInfo()
+            .then((vivintApi) => deviceSet.handleSnapshot(vivintApi.deviceSnapshot(), vivintApi.deviceSnapshotTs()))
+            .catch((err) => log.error("Error getting system info:", describeError(err)))
+      }, (config_apiLoginRefreshSecs / 20) * 1000))
+    }
+
+    shutdown() {
+      this.timers.forEach((t) => clearInterval(t))
+      this.timers = []
+      if (this.deviceSet) this.deviceSet.destroy()
+      if (this.pubNub) {
+        try {
+          this.pubNub.unsubscribeAll()
+          this.pubNub.stop()
+        } catch (err) {
+          this.log.debug("Error stopping PubNub:", describeError(err))
+        }
+      }
     }
 
     configureAccessory(accessory) {
