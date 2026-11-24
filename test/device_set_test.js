@@ -376,6 +376,36 @@ describe('DeviceSet', function () {
         Characteristic.SecuritySystemCurrentState.STAY_ARM)
     })
 
+    describe('with several systems on the account (#133)', function () {
+      it('ignores updates for another panel even when device ids overlap', function () {
+        const deviceSet = build([panelData(), windowSensorData()])
+        deviceSet.handleMessage({ ...deviceUpdate([{ Id: 42, Status: true }], laterTs), PanelId: 14 })
+        assert.strictEqual(contactState(deviceSet.devicesById[42]), Characteristic.ContactSensorState.CONTACT_DETECTED)
+      })
+
+      it('ignores security status updates for another panel', function () {
+        const deviceSet = build([panelData()])
+        deviceSet.handleMessage({ Id: 14, PanelId: 14, Data: { PlatformContext: { Timestamp: laterTs }, Status: VivintDict.SecurityState.ARMED_STAY } })
+        assert.strictEqual(deviceSet.devicesById[PANEL_ID].service.valueOf(Characteristic.SecuritySystemCurrentState),
+          Characteristic.SecuritySystemCurrentState.DISARMED)
+      })
+
+      it('applies updates for our panel (number or string id) and messages without a panel id', function () {
+        const deviceSet = build([panelData(), windowSensorData(), doorSensorData()])
+        deviceSet.handleMessage({ ...deviceUpdate([{ Id: 42, Status: true }], laterTs), PanelId: mockVivintApi.panelId })
+        assert.strictEqual(contactState(deviceSet.devicesById[42]), Characteristic.ContactSensorState.CONTACT_NOT_DETECTED)
+        deviceSet.handleMessage({ ...deviceUpdate([{ Id: 28, Status: true }], laterTs), PanelId: `${mockVivintApi.panelId}` })
+        assert.strictEqual(contactState(deviceSet.devicesById[28]), Characteristic.ContactSensorState.CONTACT_NOT_DETECTED)
+        deviceSet.handleMessage(deviceUpdate([{ Id: 42, Status: false }], laterTs))
+        assert.strictEqual(contactState(deviceSet.devicesById[42]), Characteristic.ContactSensorState.CONTACT_DETECTED)
+      })
+
+      it('records the panel id on new accessories', function () {
+        DeviceSet = DeviceSetModule({}, silentLog, MockHomebridge, mockVivintApi)
+        assert.strictEqual(DeviceSet.createDeviceAccessory(windowSensorData()).context.panelId, mockVivintApi.panelId)
+      })
+    })
+
     it('marks a lock as jammed from a "failed to lock" inbox message', function () {
       const deviceSet = build([panelData(), doorLockData()])
       deviceSet.handleMessage({

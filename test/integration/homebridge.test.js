@@ -11,7 +11,7 @@ const net = require('net')
 const os = require('os')
 const path = require('path')
 
-const { MockVivint, SENTINELS, PANEL_ID, PARTITION_ID, SNAPSHOT_TS } = require('./mock-vivint')
+const { MockVivint, SENTINELS, PANEL_ID, PARTITION_ID, SECOND_PANEL_ID, SECOND_PARTITION_ID, SNAPSHOT_TS } = require('./mock-vivint')
 const { HapClient, T } = require('./hap-client')
 
 const HB_PROJECT = process.env.HB_PROJECT
@@ -171,6 +171,13 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       assert.strictEqual(auth[0].headers.cookie, SENTINELS.refreshToken)
       assert.ok(mock.vivintRequests((r) => r.path === `/api/systems/${PANEL_ID}`).length >= 1)
       assert.ok(mock.vivintRequests((r) => r.path === `/api/panel-login/${PANEL_ID}`).length >= 1)
+    })
+
+    it('lists every system on the account and uses the first by default (#133)', function () {
+      assert.match(hb.log, new RegExp(`Found Vivint system \\[PanelId\\]:${PANEL_ID} \\[Name\\]:Home`))
+      assert.match(hb.log, new RegExp(`Found Vivint system \\[PanelId\\]:${SECOND_PANEL_ID} \\[Name\\]:Cabin`))
+      assert.match(hb.log, /Using the first Vivint system .*Set "panelId"/)
+      assert.strictEqual(mock.vivintRequests((r) => r.path === `/api/systems/${SECOND_PANEL_ID}`).length, 0, 'second system not loaded')
     })
 
     it('uses the rotated refresh token from Set-Cookie for subsequent calls', function () {
@@ -333,6 +340,25 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       await waitFor(async () => (await hap.get(ref)).value === 0, { message: 'contact closed' })
     })
 
+    it('ignores updates for another system on the account with overlapping device ids (#133)', async function () {
+      const window = await hap.find('Basement Window', T.ContactSensor, T.ContactSensorState)
+      const panel = await hap.find('Panel', T.SecuritySystem, T.SecuritySystemCurrentState)
+      const panelState = (await hap.get(panel)).value
+      mock.pushPubNub({
+        _id: `${SECOND_PANEL_ID}|${SECOND_PARTITION_ID}`, t: 'account_partition', panid: SECOND_PANEL_ID, parid: SECOND_PARTITION_ID, op: 'u',
+        da: { plctx: { ts: '2026-11-24T11:00:00.000000' }, d: [{ _id: 42, s: true }] },
+      })
+      mock.pushPubNub({ _id: SECOND_PANEL_ID, t: 'account_system', panid: SECOND_PANEL_ID, da: { plctx: { ts: '2026-11-24T11:00:01.000000' }, s: 4 } })
+      await sleep(1500)
+      assert.strictEqual((await hap.get(window)).value, 0, 'Basement Window unchanged')
+      assert.strictEqual((await hap.get(panel)).value, panelState, 'Panel unchanged')
+      // Our own panel's updates still apply
+      push([{ _id: 42, s: true }])
+      await waitFor(async () => (await hap.get(window)).value === 1, { message: 'own panel update' })
+      push([{ _id: 42, s: false }])
+      await waitFor(async () => (await hap.get(window)).value === 0, { message: 'own panel update cleared' })
+    })
+
     it('ignores stale updates older than the snapshot', async function () {
       const ref = await hap.find('Basement Window', T.ContactSensor, T.ContactSensorState)
       mock.pushPubNub({ _id: `${PANEL_ID}|${PARTITION_ID}`, t: 'account_partition', da: { plctx: { ts: '2020-01-01T00:00:00.000000' }, d: [{ _id: 42, s: true }] } })
@@ -469,6 +495,10 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
   describe('restart', function () {
     let hb2
 
+    afterEach(function () {
+      if (hb2 && this.currentTest.state === 'failed') console.log('---- restarted Homebridge log tail ----\n' + hb2.tail(120))
+    })
+
     after(async function () {
       if (hb2) {
         await hb2.stop().catch(() => {})
@@ -548,6 +578,81 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       hb2.assertAlive()
       assert.strictEqual(mock.vivintRequests((r) => r.path === '/api/authuser').length - authBefore, 1, 'no login retries on 401')
       assert.ok(!hb2.log.includes('EXPIRED_TOKEN'), 'token not logged')
+    })
+
+    // Accessory cache written by Homebridge; strip `panelId` to simulate a cache from a version before 2.0.0-beta.1
+    const cacheFile = () => path.join(hb.storage, 'accessories', 'cachedAccessories')
+    const readCache = () => JSON.parse(fs.readFileSync(cacheFile(), 'utf8'))
+    const stripPanelIds = () => {
+      const cache = readCache()
+      cache.forEach((acc) => { delete acc.context.panelId })
+      fs.writeFileSync(cacheFile(), JSON.stringify(cache))
+      return cache.length
+    }
+    const startHb2 = async (platformConfig) => {
+      hb2 = new HomebridgeProcess({ storage: hb.storage, hapPort: hb.hapPort, mockPort, certPath: certs.cert, platformConfig })
+      hb2.start()
+      await waitFor(() => /Adding \d+ accessories/.test(hb2.log), { timeout: 60000, message: 'bootstrap' })
+    }
+
+    it('keeps accessories cached by older versions (no panelId) and records their panel', async function () {
+      await hb2.stop()
+      // Settle the cache first (earlier tests leave a re-classified accessory behind)
+      await startHb2({ motionDetectedOccupancySensorMins: 1, lowBatteryLevel: 15 })
+      await hb2.stop()
+      const cached = stripPanelIds()
+      assert.ok(cached > 10)
+      await startHb2({ motionDetectedOccupancySensorMins: 1, lowBatteryLevel: 15 })
+      assert.match(hb2.log, /Removing 0 accessories/)
+      assert.match(hb2.log, /Adding 0 accessories/)
+      await hb2.stop()
+      const cache = readCache()
+      assert.strictEqual(cache.length, cached)
+      assert.deepStrictEqual([...new Set(cache.map((acc) => acc.context.panelId))], [PANEL_ID])
+    })
+
+    it('switches to the configured panelId, replacing the other system\'s accessories (#133)', async function () {
+      const cached = stripPanelIds() // legacy accessories belong to the first system
+      await startHb2({ panelId: SECOND_PANEL_ID })
+      assert.match(hb2.log, new RegExp(`Using Vivint system \\[PanelId\\]:${SECOND_PANEL_ID} \\[Name\\]:Cabin \\(configured panelId\\)`))
+      assert.match(hb2.log, new RegExp(`Removing ${cached} accessories`))
+      assert.match(hb2.log, /Adding 3 accessories/)
+
+      let lastNames = []
+      const accs = await waitFor(async () => {
+        const a = await hap.accessories()
+        lastNames = a.map((x) => `${x.aid}:${x.name}`)
+        return a.some((x) => x.name === 'Cabin Door') && a
+      }, { timeout: 40000, message: 'Cabin accessories' }).catch((err) => { throw new Error(`${err.message}; HAP has: ${lastNames.join(', ')}`) })
+      const names = accs.map((a) => a.name).filter((n) => !n.startsWith('Vivint Test Bridge')).sort()
+      assert.deepStrictEqual(names, ['Cabin Door', 'Cabin Panel', 'Cabin Window'])
+
+      const lock = await hap.find('Cabin Door', T.LockMechanism, T.LockTargetState)
+      assert.strictEqual((await hap.set(lock, 1)).status, 0)
+      const put = await waitFor(() => mock.vivintRequests((r) => r.method === 'PUT' && r.path.endsWith('/locks/24')).pop(), { message: 'lock PUT' })
+      assert.strictEqual(put.path, `/api/${SECOND_PANEL_ID}/${SECOND_PARTITION_ID}/locks/24`)
+
+      await waitFor(() => mock.pendingSubscribes.length > 0, { message: 'PubNub subscribe' })
+      const window = await hap.find('Cabin Window', T.ContactSensor, T.ContactSensorState)
+      mock.pushPubNub({ _id: `${PANEL_ID}|${PARTITION_ID}`, t: 'account_partition', panid: PANEL_ID, da: { plctx: { ts: '2026-11-24T14:00:00.000000' }, d: [{ _id: 42, s: true }] } })
+      await sleep(1500)
+      assert.strictEqual((await hap.get(window)).value, 0, 'first system\'s update ignored')
+      mock.pushPubNub({ _id: `${SECOND_PANEL_ID}|${SECOND_PARTITION_ID}`, t: 'account_partition', panid: SECOND_PANEL_ID, da: { plctx: { ts: '2026-11-24T14:00:01.000000' }, d: [{ _id: 42, s: true }] } })
+      await waitFor(async () => (await hap.get(window)).value === 1, { message: 'Cabin Window update' })
+      hb2.assertAlive()
+      assert.ok(!FATAL_PATTERNS.some((p) => p.test(hb2.log)), hb2.tail(80))
+    })
+
+    it('reports an unknown configured panelId clearly', async function () {
+      await hb2.stop()
+      await new Promise((r) => setTimeout(r, 200))
+      hb2 = new HomebridgeProcess({ storage: hb.storage, hapPort: hb.hapPort, mockPort, certPath: certs.cert, platformConfig: { panelId: 99 } })
+      hb2.start()
+      await waitFor(() => /Configured panelId 99 was not found on this Vivint account\. Available systems: \[PanelId\]:13 \[Name\]:Home, \[PanelId\]:14 \[Name\]:Cabin/.test(hb2.log),
+        { timeout: 60000, message: 'unknown panelId error' })
+      await sleep(1000)
+      hb2.assertAlive()
+      assert.ok(!/Error while bootstrapping accessories/.test(hb2.log))
     })
   })
 })
