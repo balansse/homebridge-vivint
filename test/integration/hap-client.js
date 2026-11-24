@@ -8,6 +8,7 @@ const T = {
   MotionSensor: '85', MotionDetected: '22',
   OccupancySensor: '86', OccupancyDetected: '71',
   SmokeSensor: '87', SmokeDetected: '76',
+  CarbonMonoxideSensor: '7F', CarbonMonoxideDetected: '69',
   LockMechanism: '45', LockCurrentState: '1D', LockTargetState: '1E',
   SecuritySystem: '7E', SecuritySystemCurrentState: '66', SecuritySystemTargetState: '67',
   GarageDoorOpener: '41', CurrentDoorState: 'E', TargetDoorState: '32',

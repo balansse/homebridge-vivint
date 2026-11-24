@@ -84,8 +84,10 @@ Currently, the following items are supported:
 * Glass break sensors
 * Smoke detectors
 * Carbon monoxide sensors
-* Heat / Freeze sensors
+* Heat / Freeze sensors (shown as contact sensors, as HomeKit has no matching type)
 * Z-Wave switches (binary and dimmer) that are paired with the Vivint panel. Be sure they are labeled "light" or "fan" if they control those respective devices.
+
+When a newer plugin version maps a device to a different HomeKit type (for example, combo smoke/CO detectors that used to show up as contact sensors), that accessory is removed and re-added once. Its room and any automations that use it need to be set up again in the Home app.
 
 As I do not have access to all varieties of hardware that is supported by Vivint, some incompatibilities might happen. If you notice any weird behavior or your Vivint device is not supported, please submit an issue with your homebridge.log file attached.
 

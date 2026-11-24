@@ -27,6 +27,9 @@ function devices() {
     { _id: 42, t: 'wireless_sensor', ec: 862, n: 'Basement Window', s: false, ser: 192977, ser32: 16970193, lb: false, ta: false },
     { _id: 45, t: 'wireless_sensor', ec: 869, n: 'Family Room Motion', s: false },
     { _id: 46, t: 'wireless_sensor', ec: 589, n: 'Hallway Smoke', s: false },
+    { _id: 47, t: 'wireless_sensor', ec: 4040, n: 'Upstairs Combo Smoke', s: false },
+    { _id: 48, t: 'wireless_sensor', ec: 4050, n: 'Upstairs Combo CO', s: false },
+    { _id: 49, t: 'wireless_sensor', ec: 4020, n: 'Den PIR', s: false },
     { _id: 24, t: 'door_lock_device', n: 'Front Door', s: true, bl: 80 },
     { _id: 30, t: 'garage_door_device', n: 'Garage', s: 1 },
     { _id: 50, t: 'thermostat_device', n: 'Hall Thermostat', val: 21, om: 1, os: 0, hsp: 20, csp: 25, hmdt: 40, tc: false, fs: 0 },
@@ -41,12 +44,13 @@ function devices() {
   ]
 }
 
-function systemInfo(securityStatus = 0) {
+function systemInfo(securityStatus = 0, deviceOverrides = {}) {
+  const d = devices().map((dev) => ({ ...dev, ...deviceOverrides[dev._id] }))
   return {
     system: {
       panid: PANEL_ID,
       pnlctx: { ts: SNAPSHOT_TS },
-      par: [{ parid: PARTITION_ID, s: securityStatus, d: devices() }],
+      par: [{ parid: PARTITION_ID, s: securityStatus, d }],
     },
   }
 }
@@ -61,6 +65,7 @@ class MockVivint {
     // Real PubNub timetokens are 10^-7 s since the epoch; pubnub >= 9 drops messages older than its subscription start
     this.timetoken = BigInt(Date.now()) * 10000n
     this.securityStatus = 0
+    this.deviceOverrides = {} // { [deviceId]: partial raw device fields merged into the snapshot }
     this.mfaRequired = false
     this.mfaValidated = false
     this.server = https.createServer({ cert, key }, (req, res) => this._handle(req, res))
@@ -198,7 +203,7 @@ class MockVivint {
         'set-cookie': [`${SENTINELS.rotatedToken}; Path=/; HttpOnly; Secure`, 'other=1; Path=/'],
       })
     }
-    if (req.method === 'GET' && p === `/api/systems/${PANEL_ID}`) return json(200, systemInfo(this.securityStatus))
+    if (req.method === 'GET' && p === `/api/systems/${PANEL_ID}`) return json(200, systemInfo(this.securityStatus, this.deviceOverrides))
     if (req.method === 'GET' && p === `/api/panel-login/${PANEL_ID}`) return json(200, { n: SENTINELS.panelUser, pswd: SENTINELS.panelPassword })
     if (req.method === 'PUT' && p.startsWith(`/api/${PANEL_ID}/${PARTITION_ID}/`)) {
       if (p.endsWith('/armedstates')) {
