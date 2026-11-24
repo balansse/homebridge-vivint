@@ -5,6 +5,7 @@ const PlatformName = "Vivint"
 const VivintApiModule = require("./lib/vivint_api.js")
 const DeviceSetModule = require("./lib/device_set.js")
 const { describeError } = require("./lib/http.js")
+const PubNubSupervisor = require("./lib/pubnub_supervisor.js")
 
 module.exports = function (homebridge) {
   Service = homebridge.hap.Service;
@@ -33,6 +34,7 @@ module.exports = function (homebridge) {
       this.cachedAccessories = []
       this.timers = []
       this.pubNub = null
+      this.pubNubSupervisor = null
       this.deviceSet = null
 
       if (!config || !config.refreshToken) {
@@ -122,27 +124,13 @@ module.exports = function (homebridge) {
         }
       })
 
+      // Reconnects PubNub after it gives up retrying, and resubscribes if the stream goes quiet for too long
+      const supervisor = new PubNubSupervisor(pubNub, [vivintApi.pubNubChannel()], log)
+      this.pubNubSupervisor = supervisor
       pubNub.addListener({
-        status: (statusEvent) => {
-          switch(statusEvent.category){
-            case 'PNConnectedCategory':
-              log.debug("Connected to PubNub")
-              break
-            case 'PNReconnectedCategory':
-              log.info("Reconnected to PubNub")
-              break
-            case 'PNNetworkDownCategory':
-            case 'PNNetworkIssuesCategory':
-            case 'PNDisconnectedUnexpectedlyCategory':
-            case 'PNConnectionErrorCategory':
-            case 'PNTimeoutCategory':
-              log.warn(`PubNub connection problem (${statusEvent.category}), reconnecting...`)
-              break
-            default:
-              log.debug(`PubNub status: ${statusEvent.category}`)
-          }
-        },
+        status: (statusEvent) => supervisor.handleStatus(statusEvent),
         message: (msg) => {
+          supervisor.noteActivity()
           // A single malformed message must never break the real-time update stream
           try {
             let parsed = vivintApi.parsePubNub(msg.message)
@@ -157,6 +145,7 @@ module.exports = function (homebridge) {
 
       //Refreshing the token
       this.timers.push(setInterval(() => {
+        supervisor.check()
         vivintApi.renew()
           .then((vivintApi) => vivintApi.renewPanelLogin())
           .catch((err) => log.error("Error refreshing login info:", describeError(err)))
@@ -174,6 +163,7 @@ module.exports = function (homebridge) {
       this.timers.forEach((t) => clearInterval(t))
       this.timers = []
       if (this.deviceSet) this.deviceSet.destroy()
+      if (this.pubNubSupervisor) this.pubNubSupervisor.destroy()
       if (this.pubNub) {
         try {
           this.pubNub.unsubscribeAll()

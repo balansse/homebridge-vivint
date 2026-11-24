@@ -1,5 +1,6 @@
 ## Unreleased
 ### Fixes
+- Real-time updates (motion, doorbell, camera events) no longer stop for good after a network or PubNub outage. The plugin now reconnects with backoff after PubNub gives up retrying, and resubscribes if the stream has been silent for an hour. It logs one line when the connection is lost and one when it is restored (#172).
 - A failed command (lock, arm/disarm, garage door, thermostat) no longer crashes Homebridge, and the failure is now reported to HomeKit instead of showing success.
 - One malformed real-time message no longer stops all further device updates.
 - An expired or revoked refresh token is reported clearly once instead of retrying the login forever.

@@ -351,6 +351,43 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       await waitFor(async () => (await hap.get(ref)).value === 2, { message: 'lock jammed' })
     })
 
+    it('recovers on its own from brief subscribe failures (PubNub retries)', async function () {
+      const motion = await hap.find('Family Room Motion', T.MotionSensor, T.MotionDetected)
+      push([{ _id: 45, s: false }])
+      await waitFor(async () => Number((await hap.get(motion)).value) === 0, { message: 'motion cleared' })
+      await waitFor(() => mock.pendingSubscribes.length > 0, { message: 'PubNub long-poll pending' })
+      const before = mock.subscribeRequests().length
+      mock.failSubscribes(2, 'drop')
+      await waitFor(() => mock.subscribeFailures.remaining === 0 && mock.pendingSubscribes.length > 0,
+        { timeout: 30000, message: 'PubNub resubscribed after dropped connections' })
+      assert.ok(mock.subscribeRequests().length - before >= 2)
+      push([{ _id: 45, s: true }])
+      await waitFor(async () => Number((await hap.get(motion)).value) === 1, { message: 'motion after recovery' })
+    })
+
+    it('reconnects after PubNub gives up, and motion reaches HomeKit again (#172)', async function () {
+      this.timeout(90000)
+      const motion = await hap.find('Family Room Motion', T.MotionSensor, T.MotionDetected)
+      push([{ _id: 45, s: false }])
+      await waitFor(async () => Number((await hap.get(motion)).value) === 0, { message: 'motion cleared' })
+      await waitFor(() => mock.pendingSubscribes.length > 0, { message: 'PubNub long-poll pending' })
+      const logStart = hb.log.length
+      // 403 is not retried by PubNub: the client gives up immediately, as it does after exhausting its retries.
+      // The first failure kills the long-poll, the second the reconnect handshake (5s later); the reconnect 10s
+      // after that succeeds.
+      mock.failSubscribes(2, 403)
+      await waitFor(() => /PubNub connection lost/.test(hb.log.slice(logStart)), { message: 'connection lost warning' })
+      await waitFor(() => /PubNub connection restored/.test(hb.log.slice(logStart)),
+        { timeout: 60000, message: 'connection restored after reconnect' })
+      await waitFor(() => mock.pendingSubscribes.length > 0, { message: 'PubNub long-poll pending after reconnect' })
+      push([{ _id: 45, s: true }])
+      await waitFor(async () => Number((await hap.get(motion)).value) === 1, { message: 'motion after reconnect' })
+      const lines = hb.log.slice(logStart).split('\n')
+      assert.strictEqual(lines.filter((l) => /PubNub connection lost/.test(l)).length, 1, 'one warning per outage')
+      assert.strictEqual(lines.filter((l) => /PubNub connection restored/.test(l)).length, 1, 'one recovery line')
+      hb.assertAlive()
+    })
+
     it('survives malformed messages', async function () {
       mock.pushPubNub({ _id: 'msg2', t: 'inbox_message', da: { sub: 'Something failed to lock' } })
       mock.pushPubNub({ _id: 'x', t: 'account_partition', da: { d: [{ _id: 42, s: [true] }] } })
