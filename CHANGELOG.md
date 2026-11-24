@@ -1,5 +1,6 @@
 ## Unreleased
 ### Fixes
+- Clearer diagnostics: an HTTP 403 from Vivint is reported as a Cloudflare block ("try again later or from another network") instead of a wrong password (#107); accounts that only have a `smarthomesystem` are reported as not supported yet instead of "No Vivint system found" (#82); Nest entries no longer show up as "Device not (yet) supported" (#176); network errors with an empty message (such as a failed connection to every address of a host) are logged as a readable one-line reason (#151, #173).
 - Combo smoke/CO detectors (equipment codes 4040/4050) now appear as Smoke and Carbon Monoxide sensors, and PIR3 motion sensors (4020) as motion sensors, instead of contact sensors (#144, #172). **These accessories are re-created once after updating: re-assign their room and any automations in the Home app.**
 - Real-time updates (motion, doorbell, camera events) no longer stop for good after a network or PubNub outage. The plugin now reconnects with backoff after PubNub gives up retrying, and resubscribes if the stream has been silent for an hour. It logs one line when the connection is lost and one when it is restored (#172).
 - A failed command (lock, arm/disarm, garage door, thermostat) no longer crashes Homebridge, and the failure is now reported to HomeKit instead of showing success.

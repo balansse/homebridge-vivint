@@ -476,6 +476,25 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       }
     })
 
+    it('reports a smarthomesystem-only account as not supported yet (#82)', async function () {
+      mock.override((r) => r.path === '/api/authuser', {
+        body: { u: { mbc: 'SENTINEL_CHANNEL_abc', system: [], smarthomesystem: [{ panid: 77 }] } },
+      })
+      hb2 = new HomebridgeProcess({ storage: hb.storage, hapPort: hb.hapPort, mockPort, certPath: certs.cert, platformConfig: {} })
+      hb2.start()
+      try {
+        await waitFor(() => /This Vivint account type is not supported yet \(smarthomesystem\)/.test(hb2.log),
+          { timeout: 60000, message: 'smarthomesystem message' })
+        assert.doesNotMatch(hb2.log, /No Vivint system found/)
+        await sleep(1000)
+        hb2.assertAlive()
+        // Logged as "Error while bootstrapping accessories: <message>", but nothing may crash
+        assert.ok(![/Unhandled( promise)? rejection/i, /uncaughtException/i].some((p) => p.test(hb2.log)), hb2.tail(80))
+      } finally {
+        await hb2.stop() // don't leave it holding the HAP port for the next test
+      }
+    })
+
     it('restores cached accessories and keeps them working after a restart', async function () {
       const before = await (async () => hb.accessoriesSnapshot)()
       hb2 = new HomebridgeProcess({

@@ -71,6 +71,14 @@ describe('VivintApi', function () {
       assert.ok(errors.every((m) => !m.includes('s=tok')), 'token never logged')
     })
 
+    it('explains an HTTP 403 as a Cloudflare block while retrying (#107)', async function () {
+      script = [apiError(403), authOk()]
+      await VivintApi.doAuth({ refreshToken: 's=tok' })
+      const errors = logs.filter(([l]) => l === 'error').map(([, m]) => m)
+      assert.strictEqual(errors.length, 1)
+      assert.match(errors[0], /Vivint\/Cloudflare blocked this request \(HTTP 403\)\. Try again later or from another network\./)
+    })
+
     it('rethrows transient failures when retry is disabled', async function () {
       script = [apiError(500)]
       await assert.rejects(VivintApi.doAuth({ refreshToken: 's=tok' }, { retry: false }), /HTTP 500/)
@@ -110,6 +118,20 @@ describe('VivintApi', function () {
     it('reports an account without systems clearly', async function () {
       script = [{ body: { u: { mbc: 'c', system: [] } } }]
       await assert.rejects(VivintApi.login({ refreshToken: 's=x' }), /No Vivint system found/)
+      assert.ok(logs.some(([l, m]) => l === 'debug' && m === 'Vivint account fields: MessageBroadcastChannel, System'),
+        JSON.stringify(logs))
+    })
+
+    it('reports a smarthomesystem-only account as not supported yet (#82)', async function () {
+      script = [{ body: { u: { mbc: 'c', system: [], smarthomesystem: [{ panid: 77 }] } } }]
+      await assert.rejects(VivintApi.login({ refreshToken: 's=x' }),
+        /This Vivint account type is not supported yet \(smarthomesystem\)\. Please comment on https:\/\/github\.com\/balansse\/homebridge-vivint\/issues\/82/)
+      assert.strictEqual(calls.length, 1, 'nothing else requested')
+    })
+
+    it('prefers a regular system over smarthomesystem', async function () {
+      script = [{ body: { u: { mbc: 'c', system: [{ panid: 13 }], smarthomesystem: [{ panid: 77 }] } } }, systemInfo, panelLogin]
+      assert.strictEqual((await VivintApi.login({ refreshToken: 's=x' })).panelId, 13)
     })
 
     it('sends device commands as a raw JSON string with the session cookie', async function () {
