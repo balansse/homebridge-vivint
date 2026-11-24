@@ -1,0 +1,79 @@
+name: 🧪 Beta feedback
+description: Report a problem (or success) with a beta version, e.g. 2.0.0-beta
+title: "[Beta] "
+labels: ["beta"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing! The maintainer no longer has a Vivint system, so detailed reports are what make a fix possible.
+        Logs no longer contain tokens or passwords, but please skim them before posting.
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: Shown on the plugin tile in the Homebridge UI
+      placeholder: 2.0.0-beta
+    validations:
+      required: true
+  - type: input
+    id: homebridge-version
+    attributes:
+      label: Homebridge version
+      placeholder: "2.5.0"
+    validations:
+      required: true
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      placeholder: "22.12.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How do you run Homebridge?
+      options:
+        - Raspberry Pi image / Linux
+        - Docker
+        - macOS
+        - Windows
+        - HOOBS
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: tested
+    attributes:
+      label: What did you test?
+      description: Tick what you tried. Describe failures below.
+      options:
+        - label: Startup (all accessories appear)
+        - label: Security system (arm stay/away, disarm)
+        - label: Locks
+        - label: Garage door
+        - label: Thermostat
+        - label: Sensors updating live (contact/motion/smoke/CO)
+        - label: Cameras / doorbell (snapshot, live view, doorbell press)
+        - label: Lights / dimmers / fans
+        - label: Settings screen login (with or without 2FA)
+        - label: Still working after several hours / after a restart
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead. If everything worked, say so!
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Homebridge log (debug mode)
+      description: Enable debug mode in Homebridge settings, reproduce the problem, and paste the relevant [Vivint] lines.
+      render: text
+  - type: input
+    id: previous-version
+    attributes:
+      label: Did this work in a previous version?
+      placeholder: e.g. "yes, in 1.12.2" / "never worked" / "not sure"
