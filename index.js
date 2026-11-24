@@ -60,7 +60,7 @@ module.exports = function (homebridge) {
           this.bootstrap(vivintApi, pubNub, config_apiLoginRefreshSecs)
         })
         .catch((error) => {
-          if (error instanceof VivintApiModule.VivintAuthError) {
+          if (error instanceof VivintApiModule.VivintAuthError || error instanceof VivintApiModule.VivintConfigError) {
             log.error(error.message)
           } else {
             log.error("Error while bootstrapping accessories:", describeError(error))
@@ -96,11 +96,16 @@ module.exports = function (homebridge) {
           })
           .filter((dvc) => dvc)
 
-      //Remove stale/ignored accessories
+      //Device ids are only unique within a panel. Accessories cached before panelId was recorded
+      //belong to the first system on the account, which is the one older versions always used.
+      const panelOf = (acc) => acc.context.panelId !== undefined ? acc.context.panelId : vivintApi.defaultPanelId
+      let currentPanelCached = cachedAccessories.filter((acc) => `${panelOf(acc)}` === `${vivintApi.panelId}`)
+
+      //Remove stale/ignored accessories, and accessories of another panel
       let removedAccessories = cachedAccessories
-          .filter((acc) => !snapshotAccessories.some((snap_acc) => snap_acc.context.id === acc.context.id))
+          .filter((acc) => !currentPanelCached.includes(acc) || !snapshotAccessories.some((snap_acc) => snap_acc.context.id === acc.context.id))
       //Remove accessories that are handled differently (and previously enabled cameras if disabled now)
-      let changedAccessories = cachedAccessories
+      let changedAccessories = currentPanelCached
           .filter((acc) => snapshotAccessories.some((snap_acc) => snap_acc.context.id === acc.context.id && snap_acc.context.deviceClassName !== acc.context.deviceClassName || config.disableCameras && acc.getService(Service.CameraRTPStreamManagement)))
       let removedAndChangedAccessories = removedAccessories.concat(changedAccessories)
       log.info(`Removing ${removedAndChangedAccessories.length} accessories`)
@@ -108,11 +113,18 @@ module.exports = function (homebridge) {
 
       //Adding new accessories
       let newAccessories = snapshotAccessories
-          .filter((acc) => !cachedAccessories.some((cached_acc) => cached_acc.context.id === acc.context.id) || changedAccessories.some((changed_acc) => changed_acc.context.id === acc.context.id))
+          .filter((acc) => !currentPanelCached.some((cached_acc) => cached_acc.context.id === acc.context.id) || changedAccessories.some((changed_acc) => changed_acc.context.id === acc.context.id))
       log.info(`Adding ${newAccessories.length} accessories`)
       api.registerPlatformAccessories(PluginName, PlatformName, newAccessories)
 
       let keptAccessories = cachedAccessories.filter((el) => !removedAndChangedAccessories.includes(el))
+
+      //Record the panel on accessories cached by older versions
+      let legacyAccessories = keptAccessories.filter((acc) => acc.context.panelId === undefined)
+      if (legacyAccessories.length > 0) {
+        legacyAccessories.forEach((acc) => { acc.context.panelId = vivintApi.panelId })
+        api.updatePlatformAccessories(legacyAccessories)
+      }
 
       keptAccessories.concat(newAccessories).forEach((accessory) => {
         let data = snapshotDevices.find((snap_device) => snap_device.Id === accessory.context.id)
