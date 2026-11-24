@@ -1,5 +1,9 @@
 ## Unreleased
+### Changes
+- Accounts with several Vivint systems: the log lists every system on startup, and the new `panelId` setting picks which one to use (default: the first, as before). Changing it replaces the accessories of the previous system (#133).
+
 ### Fixes
+- On accounts with several systems, real-time updates from another system no longer change this system's accessories when device IDs overlap (#133).
 - Combo smoke/CO detectors (equipment codes 4040/4050) now appear as Smoke and Carbon Monoxide sensors, and PIR3 motion sensors (4020) as motion sensors, instead of contact sensors (#144, #172). **These accessories are re-created once after updating: re-assign their room and any automations in the Home app.**
 - Real-time updates (motion, doorbell, camera events) no longer stop for good after a network or PubNub outage. The plugin now reconnects with backoff after PubNub gives up retrying, and resubscribes if the stream has been silent for an hour. It logs one line when the connection is lost and one when it is restored (#172).
 - A failed command (lock, arm/disarm, garage door, thermostat) no longer crashes Homebridge, and the failure is now reported to HomeKit instead of showing success.

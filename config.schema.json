@@ -20,6 +20,11 @@
             "default": "",
             "required": true
         },
+        "panelId": {
+            "type": "integer",
+            "title": "Vivint system (panel ID)",
+            "description": "Only needed if your Vivint account has more than one system. On startup the log lists every system as 'Found Vivint system [PanelId]:... [Name]:...'. Leave empty to use the first one."
+        },
         "apiLoginRefreshSecs": {
             "type": "integer",
             "title": "API Refresh",
