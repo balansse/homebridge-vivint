@@ -8,7 +8,7 @@ const UI_DIST_DIR = `${DIST_DIR}/homebridge-ui`;
 console.log('Preparing package for publishing');
 
 console.log('Installing UI dependencies');
-cp.execSync('npm install', {
+cp.execSync('npm ci', {
   stdio: [0, 1, 2],
   cwd: `${UI_LIB_DIR}`
 });

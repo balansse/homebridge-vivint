@@ -18,10 +18,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git://github.com/balansse/homebridge-vivint.git"
+    "url": "git+https://github.com/balansse/homebridge-vivint.git"
   },
   "bugs": {
-    "url": "http://github.com/balansse/homebridge-vivint/issues"
+    "url": "https://github.com/balansse/homebridge-vivint/issues"
   },
   "engines": {
     "node": ">=22",
