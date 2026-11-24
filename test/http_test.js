@@ -89,6 +89,37 @@ describe('http', function () {
     await assert.rejects(httpRequest({ url: url('/slow'), timeoutMs: 200, agent }), /ETIMEDOUT/)
   })
 
+  describe('network errors on a single line (#151, #173)', function () {
+    it('describes a real connection failure to every address of a host', async function () {
+      // localhost resolves to ::1 and 127.0.0.1; Node reports both failures as one AggregateError with an empty message
+      await assert.rejects(httpRequest({ url: 'https://localhost:1/api/authuser', timeoutMs: 5000 }), (err) => {
+        assert.ok(err instanceof VivintApiError)
+        assert.match(describeError(err), /^GET \/api\/authuser failed: ECONNREFUSED$/)
+        return true
+      })
+    })
+
+    it('describes an AggregateError with an empty message', function () {
+      const withCode = Object.assign(new AggregateError([
+        Object.assign(new Error('connect ECONNREFUSED ::1:443'), { code: 'ECONNREFUSED' }),
+        Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:443'), { code: 'ECONNREFUSED' }),
+      ], ''), { code: 'ECONNREFUSED' })
+      assert.strictEqual(describeError(withCode), 'ECONNREFUSED')
+
+      const withoutCode = new AggregateError([
+        Object.assign(new Error('connect ENETUNREACH ::1:443'), { code: 'ENETUNREACH' }),
+        Object.assign(new Error('connect ETIMEDOUT 1.2.3.4:443'), { code: 'ETIMEDOUT' }),
+        Object.assign(new Error('connect ETIMEDOUT 1.2.3.5:443'), { code: 'ETIMEDOUT' }),
+      ], '')
+      assert.strictEqual(describeError(withoutCode), 'ENETUNREACH, ETIMEDOUT')
+      assert.strictEqual(describeError(new AggregateError([], '')), 'AggregateError')
+    })
+
+    it('keeps multi-line messages to their first line', function () {
+      assert.strictEqual(describeError(new Error('first\nsecond')), 'first')
+    })
+  })
+
   it('extracts the session cookie from Set-Cookie', function () {
     assert.strictEqual(sessionCookie({ headers: { 'set-cookie': ['a=1; Path=/', 's=xyz; HttpOnly'] } }), 's=xyz')
     assert.strictEqual(sessionCookie({ headers: {} }), undefined)
