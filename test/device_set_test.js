@@ -53,7 +53,7 @@ class MockService {
 
 const Service = {}
 for (const name of ['AccessoryInformation', 'Battery', 'ContactSensor', 'MotionSensor',
-  'OccupancySensor', 'LockMechanism', 'SecuritySystem']) {
+  'OccupancySensor', 'SmokeSensor', 'CarbonMonoxideSensor', 'LockMechanism', 'SecuritySystem']) {
   Service[name] = class extends MockService {}
   Object.defineProperty(Service[name], 'name', { value: name })
 }
@@ -87,6 +87,8 @@ const Characteristic = {
   StatusTampered: { name: 'StatusTampered', NOT_TAMPERED: 0, TAMPERED: 1 },
   ContactSensorState: { name: 'ContactSensorState', CONTACT_DETECTED: 0, CONTACT_NOT_DETECTED: 1 },
   MotionDetected: { name: 'MotionDetected' },
+  SmokeDetected: { name: 'SmokeDetected', SMOKE_NOT_DETECTED: 0, SMOKE_DETECTED: 1 },
+  CarbonMonoxideDetected: { name: 'CarbonMonoxideDetected', CO_LEVELS_NORMAL: 0, CO_LEVELS_ABNORMAL: 1 },
   OccupancyDetected: { name: 'OccupancyDetected', OCCUPANCY_NOT_DETECTED: 0, OCCUPANCY_DETECTED: 1 },
   LockCurrentState: { name: 'LockCurrentState', UNSECURED: 0, SECURED: 1, JAMMED: 2, UNKNOWN: 3 },
   LockTargetState: { name: 'LockTargetState', UNSECURED: 0, SECURED: 1 },
@@ -221,6 +223,49 @@ describe('DeviceSet', function () {
         DeviceSet = DeviceSetModule({ ignoreDeviceTypes: [ignored] }, silentLog, MockHomebridge, mockVivintApi)
         assert.strictEqual(DeviceSet.createDeviceAccessory(windowSensorData()), null, `ignore ${ignored}`)
       }
+    })
+
+    describe('wireless sensor classification by equipment code', function () {
+      const sensor = (code, Id = 80) => ({
+        Id, Type: VivintDict.PanelDeviceType.WirelessSensor, EquipmentCode: code, Name: `Sensor ${code}`, Status: false,
+      })
+      const EC = VivintDict.EquipmentCode
+
+      // #144 / #172: these were claimed by ContactSensor, which is checked first
+      for (const [code, className, ServiceClass] of [
+        [EC.APOLLO_COMBO_SMOKE, 'SmokeSensor', 'SmokeSensor'],
+        [EC.APOLLO_COMBO_CO, 'CarbonMonoxideSensor', 'CarbonMonoxideSensor'],
+        [EC.PIR3_MOTION, 'MotionSensor', 'MotionSensor'],
+      ]) {
+        it(`maps equipment code ${code} to ${className}`, function () {
+          const accessory = DeviceSet.createDeviceAccessory(sensor(code))
+          assert.strictEqual(accessory.context.deviceClassName, className)
+          assert.ok(accessory.getService(Service[ServiceClass]), `has ${ServiceClass} service`)
+          assert.ok(!accessory.getService(Service.ContactSensor), 'no ContactSensor service')
+        })
+      }
+
+      for (const code of [EC.EXISTING_HEAT, EC.EXISTING_FLOOD_TEMP, EC.GB3_GLASS_BREAK, EC.DW10_THIN_DOOR_WINDOW]) {
+        it(`keeps equipment code ${code} as a contact sensor`, function () {
+          assert.strictEqual(DeviceSet.createDeviceAccessory(sensor(code)).context.deviceClassName, 'ContactSensor')
+        })
+      }
+
+      it('reports combo smoke/CO and PIR3 motion state from snapshots and patches', function () {
+        const deviceSet = build([panelData(), sensor(EC.APOLLO_COMBO_SMOKE, 81), sensor(EC.APOLLO_COMBO_CO, 82), sensor(EC.PIR3_MOTION, 83)])
+        const smoke = deviceSet.devicesById[81].service
+        const co = deviceSet.devicesById[82].service
+        const motion = deviceSet.devicesById[83].service
+        assert.strictEqual(smoke.valueOf(Characteristic.SmokeDetected), Characteristic.SmokeDetected.SMOKE_NOT_DETECTED)
+        assert.strictEqual(co.valueOf(Characteristic.CarbonMonoxideDetected), Characteristic.CarbonMonoxideDetected.CO_LEVELS_NORMAL)
+        assert.strictEqual(motion.valueOf(Characteristic.MotionDetected), false)
+
+        deviceSet.handleMessage({ Id: 13, Data: { PlatformContext: { Timestamp: laterTs },
+          Devices: [{ Id: 81, Status: true }, { Id: 82, Status: true }, { Id: 83, Status: true }] } })
+        assert.strictEqual(smoke.valueOf(Characteristic.SmokeDetected), Characteristic.SmokeDetected.SMOKE_DETECTED)
+        assert.strictEqual(co.valueOf(Characteristic.CarbonMonoxideDetected), Characteristic.CarbonMonoxideDetected.CO_LEVELS_ABNORMAL)
+        assert.strictEqual(motion.valueOf(Characteristic.MotionDetected), true)
+      })
     })
 
     it('only adds an occupancy service when motionDetectedOccupancySensorMins is set', function () {

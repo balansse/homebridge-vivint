@@ -182,8 +182,18 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       hb.accessoriesSnapshot = await hap.accessories()
       const names = hb.accessoriesSnapshot.map((a) => a.name)
       for (const n of ['Vivint Test Bridge', 'Panel', 'Basement Window', 'Family Room Motion', 'Hallway Smoke', 'Front Door',
-        'Garage', 'Hall Thermostat', 'Euro Thermostat', 'Porch Light', 'Kitchen Light', 'Front Doorbell']) {
+        'Upstairs Combo Smoke', 'Upstairs Combo CO', 'Den PIR', 'Garage', 'Hall Thermostat', 'Euro Thermostat', 'Porch Light', 'Kitchen Light', 'Front Doorbell']) {
         assert.ok(names.some((x) => x === n || x.startsWith(`${n} `)), `missing accessory ${n}; have ${names.join(', ')}`)
+      }
+    })
+
+    it('exposes combo smoke/CO detectors and PIR3 motion with their own service types (#144, #172)', async function () {
+      const accs = await hap.accessories()
+      for (const [name, svc] of [['Upstairs Combo Smoke', T.SmokeSensor], ['Upstairs Combo CO', T.CarbonMonoxideSensor], ['Den PIR', T.MotionSensor]]) {
+        const acc = accs.find((a) => a.name === name)
+        const types = acc.services.map((s) => s.type)
+        assert.ok(types.includes(svc), `${name} has service ${svc}; has ${types.join(',')}`)
+        assert.ok(!types.includes(T.ContactSensor), `${name} must not be a contact sensor`)
       }
     })
 
@@ -345,6 +355,20 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       await waitFor(async () => (await hap.get(occupancy)).value === 1, { message: 'occupancy detected' })
     })
 
+    it('updates combo smoke/CO detectors and PIR3 motion', async function () {
+      const smoke = await hap.find('Upstairs Combo Smoke', T.SmokeSensor, T.SmokeDetected)
+      const co = await hap.find('Upstairs Combo CO', T.CarbonMonoxideSensor, T.CarbonMonoxideDetected)
+      const pir = await hap.find('Den PIR', T.MotionSensor, T.MotionDetected)
+      assert.strictEqual((await hap.get(smoke)).value, 0)
+      assert.strictEqual((await hap.get(co)).value, 0)
+      push([{ _id: 47, s: true }, { _id: 48, s: true }, { _id: 49, s: true }])
+      await waitFor(async () => (await hap.get(smoke)).value === 1, { message: 'smoke detected' })
+      await waitFor(async () => (await hap.get(co)).value === 1, { message: 'CO abnormal' })
+      await waitFor(async () => Number((await hap.get(pir)).value) === 1, { message: 'PIR3 motion detected' })
+      push([{ _id: 47, s: false }, { _id: 48, s: false }, { _id: 49, s: false }])
+      await waitFor(async () => (await hap.get(smoke)).value === 0, { message: 'smoke cleared' })
+    })
+
     it('marks a lock jammed from an inbox alert', async function () {
       const ref = await hap.find('Front Door', T.LockMechanism, T.LockCurrentState)
       mock.pushPubNub({ _id: 'msg1', t: 'inbox_message', da: { sub: 'Alert: Front Door failed to lock' } })
@@ -438,6 +462,36 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       mock.pushPubNub({ _id: `${PANEL_ID}|${PARTITION_ID}`, t: 'account_partition', da: { plctx: { ts: '2026-11-24T12:00:00.000000' }, d: [{ _id: 42, s: true }] } })
       await waitFor(async () => (await hap.get(contact)).value === 1, { message: 'contact update after restart' })
       assert.ok(!FATAL_PATTERNS.some((p) => p.test(hb2.log)), hb2.tail(80))
+    })
+
+    it('re-creates a cached accessory whose device class changed (e.g. contact sensor -> smoke sensor)', async function () {
+      // Users upgrading with a 4040/4050/4020 device cached as a ContactSensor hit this path
+      await hb2.stop()
+      mock.deviceOverrides[42] = { ec: 4040 }
+      try {
+        hb2 = new HomebridgeProcess({
+          storage: hb.storage, hapPort: hb.hapPort, mockPort, certPath: certs.cert,
+          platformConfig: { motionDetectedOccupancySensorMins: 1, lowBatteryLevel: 15 },
+        })
+        hb2.start()
+        await waitFor(() => /Adding \d+ accessories/.test(hb2.log), { timeout: 60000, message: 'bootstrap after class change' })
+        assert.match(hb2.log, /Removing 1 accessories/)
+        assert.match(hb2.log, /Adding 1 accessories/)
+        const smoke = await waitFor(() => hap.find('Basement Window', T.SmokeSensor, T.SmokeDetected), { message: 'Basement Window as smoke sensor' })
+        const accs = await hap.accessories()
+        const matches = accs.filter((a) => a.name === 'Basement Window')
+        assert.strictEqual(matches.length, 1, 'exactly one Basement Window accessory (no leftover duplicate)')
+        assert.strictEqual(accs.length, hb.accessoriesSnapshot.length, 'accessory count unchanged')
+        assert.ok(!matches[0].services.some((s) => s.type === T.ContactSensor), 'old ContactSensor service removed')
+        assert.strictEqual((await hap.get(smoke)).value, 0)
+        await waitFor(() => mock.pendingSubscribes.length > 0, { message: 'PubNub subscribe after class change' })
+        mock.pushPubNub({ _id: `${PANEL_ID}|${PARTITION_ID}`, t: 'account_partition', da: { plctx: { ts: '2026-11-24T13:00:00.000000' }, d: [{ _id: 42, s: true }] } })
+        await waitFor(async () => (await hap.get(smoke)).value === 1, { message: 'smoke update after class change' })
+        hb2.assertAlive()
+        assert.ok(!FATAL_PATTERNS.some((p) => p.test(hb2.log)), hb2.tail(80))
+      } finally {
+        delete mock.deviceOverrides[42]
+      }
     })
 
     it('reports an expired refresh token clearly without retrying or crashing', async function () {
