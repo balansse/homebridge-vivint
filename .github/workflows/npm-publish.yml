@@ -3,9 +3,10 @@
 # Requires a trusted publisher configured on npmjs.com for this repo/workflow/environment.
 # Releases are *staged*: approve them at npmjs.com (or `npm stage approve <id>`) with 2FA to go live.
 #
-# Beta releases: set a prerelease version in package.json (e.g. 1.13.0-beta.0) and run this
-# workflow with tag "beta". Users only get it if they opt in (@beta / "Install Alternate Version");
-# `latest` and Homebridge's update prompt are unaffected.
+# Branches: `latest` releases run from `master` only; `beta` releases run from the `beta` branch only.
+# Beta releases: on the `beta` branch, set a prerelease version in package.json (e.g. 1.13.0-beta.0)
+# and run this workflow from `beta` with tag "beta". Users only get it if they opt in
+# (@beta / "Install Alternate Version"); `latest` and Homebridge's update prompt are unaffected.
 
 name: Node.js Package
 
@@ -29,10 +30,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Check version, tag and registry
+      - name: Check branch, version, tag and registry
         env:
           TAG: ${{ inputs.tag }}
+          BRANCH: ${{ github.ref_name }}
         run: |
+          case "$TAG" in
+            latest) EXPECTED_BRANCH=master ;;
+            beta)   EXPECTED_BRANCH=beta ;;
+            *)      echo "::error::Unknown tag '$TAG'"; exit 1 ;;
+          esac
+          if [ "$BRANCH" != "$EXPECTED_BRANCH" ]; then
+            echo "::error::'$TAG' releases must be run from the '$EXPECTED_BRANCH' branch (this run is on '$BRANCH')."
+            exit 1
+          fi
           NAME=$(node -p "require('./package.json').name")
           VERSION=$(node -p "require('./package.json').version")
           echo "Publishing $NAME@$VERSION with tag '$TAG'"
@@ -67,7 +78,8 @@ jobs:
 
   publish-npm:
     needs: [check-version, test]
-    if: github.ref == 'refs/heads/master'
+    # Defense in depth: repeats check-version's branch rule (the prod environment also restricts branches)
+    if: (inputs.tag == 'latest' && github.ref == 'refs/heads/master') || (inputs.tag == 'beta' && github.ref == 'refs/heads/beta')
     runs-on: ubuntu-latest
     environment: prod
     permissions:
