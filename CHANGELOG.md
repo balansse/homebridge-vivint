@@ -1,5 +1,6 @@
 ## Unreleased
 ### Fixes
+- Combo smoke/CO detectors (equipment codes 4040/4050) now appear as Smoke and Carbon Monoxide sensors, and PIR3 motion sensors (4020) as motion sensors, instead of contact sensors (#144, #172). **These accessories are re-created once after updating: re-assign their room and any automations in the Home app.**
 - A failed command (lock, arm/disarm, garage door, thermostat) no longer crashes Homebridge, and the failure is now reported to HomeKit instead of showing success.
 - One malformed real-time message no longer stops all further device updates.
 - An expired or revoked refresh token is reported clearly once instead of retrying the login forever.
