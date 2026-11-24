@@ -20,7 +20,6 @@
 - Replaced the deprecated `request` library with a built-in HTTPS client (same request format), and upgraded PubNub to v14. Production dependencies have no known vulnerabilities.
 - Config UI migrated from Create React App to Vite and React 19; `@homebridge/plugin-ui-utils` 2.x.
 - The published package now ships only runtime files (and includes `lib/accessories` with current npm versions).
-- Beta releases: the publish workflow can release prerelease versions under the `beta` npm tag (opt-in for testers).
 - New CI: lint, unit tests, config UI build, and end-to-end tests of the packed plugin in Homebridge 1.x and 2.x on Node 22 and 24.
 
 ## 1.10.1 (2025-03-03)
