@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import '@homebridge/plugin-ui-utils/dist/ui.interface'
+import '@homebridge/plugin-ui-utils/ui.interface'
 
 const { homebridge } = window
 

@@ -1,3 +1,27 @@
+## Unreleased
+### Fixes
+- A failed command (lock, arm/disarm, garage door, thermostat) no longer crashes Homebridge, and the failure is now reported to HomeKit instead of showing success.
+- One malformed real-time message no longer stops all further device updates.
+- An expired or revoked refresh token is reported clearly once instead of retrying the login forever.
+- The occupancy sensor (`motionDetectedOccupancySensorMins`) now turns on when motion is detected (it never triggered before).
+- Thermostat set point and fan changes are batched properly, and rapid dimmer/fan slider changes no longer time out in HomeKit.
+- Celsius thermostats now report the correct display unit on Homebridge 2.
+- Camera streams now work with panel passwords that contain special characters, and use refreshed panel credentials.
+- Camera snapshots time out cleanly instead of leaving ffmpeg running, and can no longer crash Homebridge when ffmpeg is missing.
+- Security system target state is no longer set to an invalid value while the alarm is triggered; jammed/unknown locks keep their target state.
+- A device that fails to set up no longer prevents all other accessories from loading.
+- Timers and the PubNub connection are cleaned up when Homebridge shuts down.
+
+### Security
+- Refresh tokens, session cookies, panel credentials, MFA codes and passwords are no longer written to the Homebridge log.
+- The MFA CLI (`npm run mfa`) hides the password while typing and no longer prints raw API responses.
+
+### Maintenance
+- Replaced the deprecated `request` library with a built-in HTTPS client (same request format), and upgraded PubNub to v14. Production dependencies have no known vulnerabilities.
+- Config UI migrated from Create React App to Vite and React 19; `@homebridge/plugin-ui-utils` 2.x.
+- The published package now ships only runtime files (and includes `lib/accessories` with current npm versions).
+- New CI: lint, unit tests, config UI build, and end-to-end tests of the packed plugin in Homebridge 1.x and 2.x on Node 22 and 24.
+
 ## 1.10.1 (2025-03-03)
 ### Changes
 - Add additional types to irrelevantDeviceTypes. by @meek2100 in #167

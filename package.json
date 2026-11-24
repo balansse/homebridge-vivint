@@ -28,19 +28,18 @@
     "homebridge": ">=1.0.0 || ^2.0.0-beta.0"
   },
   "dependencies": {
-    "@homebridge/plugin-ui-utils": "0.0.19",
-    "debounce-promise": "^3.1.2",
+    "@homebridge/plugin-ui-utils": "^2.3.0",
     "ffmpeg-for-homebridge": "2.2.2",
     "get-port": "^5.1.1",
     "isobject": "^4.0.0",
-    "jpeg-extract": "^3.0.1",
-    "pubnub": "^7.2.0",
-    "request": "^2.88.2",
-    "request-promise-native": "^1.0.9"
+    "pubnub": "^14.0.1"
   },
   "devDependencies": {
-    "fs-extra": "^10.1.0",
-    "mocha": "^10.0.0"
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.15.0",
+    "fs-extra": "^11.4.1",
+    "globals": "^17.14.0",
+    "mocha": "^12.0.3"
   },
   "homepage": "https://github.com/balansse/homebridge-vivint#readme",
   "funding": [
@@ -54,12 +53,19 @@
     }
   ],
   "main": "index.js",
-  "directories": {
-    "lib": "lib",
-    "test": "test"
-  },
+  "files": [
+    "index.js",
+    "lib/",
+    "!lib/homebridge-ui/",
+    "dist/",
+    "config.schema.json",
+    "scripts/vivint_mfa_cli.js",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "test": "mocha",
+    "test:integration": "node test/integration/run.js",
+    "lint": "eslint .",
     "mfa": "node scripts/vivint_mfa_cli",
     "prepare": "node scripts/prepublish-build"
   }
