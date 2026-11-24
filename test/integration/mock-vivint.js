@@ -61,6 +61,7 @@ class MockVivint {
     this.overrides = [] // { match(req) -> bool, status, body, delayMs, times }
     this.pendingSubscribes = []
     this.pubnubQueue = []
+    this.subscribeFailures = { remaining: 0, mode: 500 } // see failSubscribes()
     // Real PubNub timetokens are 10^-7 s since the epoch; pubnub >= 9 drops messages older than its subscription start
     this.timetoken = BigInt(Date.now()) * 10000n
     this.securityStatus = 0
@@ -92,10 +93,37 @@ class MockVivint {
 
   clearOverrides() {
     this.overrides = []
+    this.subscribeFailures.remaining = 0
   }
 
   vivintRequests(filter = () => true) {
     return this.requests.filter((r) => r.host.includes('vivintsky') && filter(r))
+  }
+
+  /**
+   * Make the next `times` PubNub subscribe requests (including the long-poll that is currently pending) fail.
+   * `mode` is an HTTP status code (403 = not retried by PubNub, 5xx = retried) or 'drop' (connection reset).
+   */
+  failSubscribes(times, mode = 500) {
+    this.subscribeFailures = { remaining: times, mode }
+    for (const res of this.pendingSubscribes.splice(0)) this._failSubscribe(res)
+  }
+
+  subscribeRequests() {
+    return this.requests.filter((r) => r.path.startsWith('/v2/subscribe/'))
+  }
+
+  _failSubscribe(res) {
+    if (this.subscribeFailures.remaining <= 0) return false
+    this.subscribeFailures.remaining -= 1
+    const mode = this.subscribeFailures.mode
+    if (mode === 'drop') {
+      res.socket.destroy()
+    } else {
+      res.writeHead(mode, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ status: mode, error: true, message: 'mock failure', service: 'Access Manager' }))
+    }
+    return true
   }
 
   /** Deliver a raw Vivint PubNub message to every subscribed client. */
@@ -193,6 +221,7 @@ class MockVivint {
       return res.end(`[${this.timetoken}]`)
     }
     if (p.startsWith('/v2/subscribe/')) {
+      if (this._failSubscribe(res)) return
       const tt = url.searchParams.get('tt')
       if (!tt || tt === '0') {
         res.writeHead(200, { 'content-type': 'text/javascript; charset="UTF-8"' })
