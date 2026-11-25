@@ -97,6 +97,16 @@
             { "title": "UDP", "enum": ["udp"] }
           ]
         },
+        "snapshotStream": {
+          "title": "Camera snapshot stream",
+          "description": "Which camera stream the Home app's preview images (snapshots) are taken from. Standard definition is lighter and is what version 1.10 used; cameras without one use HD. Choose HD if snapshots fail or look wrong.",
+          "type": "string",
+          "default": "sd",
+          "oneOf": [
+            { "title": "Standard definition (default)", "enum": ["sd"] },
+            { "title": "HD", "enum": ["hd"] }
+          ]
+        },
         "showCameraConfig": {
           "title": "Show camera config",
           "description": "Shows configuration for all detected cameras in the log",
