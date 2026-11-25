@@ -722,6 +722,7 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       await waitFor(() => RETRY_LINE.test(hb2.log), { timeout: 60000, message: 'retry message' })
       assert.doesNotMatch(hb2.log, /Error while bootstrapping accessories/)
       // The pending retry timer must not keep Homebridge alive (Homebridge 2.x exits once the event loop is empty)
+      hb2.assertAlive()
       const t0 = Date.now()
       assert.ok(await hb2.stop(), 'exited')
       const hbMajor = Number(require(path.join(HB_PROJECT, 'node_modules', 'homebridge', 'package.json')).version.split('.')[0])
