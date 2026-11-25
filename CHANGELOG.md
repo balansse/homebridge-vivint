@@ -1,4 +1,4 @@
-## Unreleased
+## 2.0.0-beta.1 (2026-11-25)
 ### Changes
 - Cameras that report motion only as Smart Deter messages or short camera status messages (never "person in view") can now trigger HomeKit motion: turn on the new `cameraMotionFromDeter` or `cameraMotionFromStatus` setting. Both are off by default, so existing setups behave as before; the log suggests the setting the first time such a message arrives (#206).
 - Doorbells whose camera name doesn't contain "doorbell" (for example "Front Door") can be set up as doorbells with the new `doorbellCameraIds` setting (names or IDs), so they get ring notifications. The log lists every camera with its ID and whether it was set up as a doorbell, and logs each ring. Adding or removing a camera keeps the accessory, its room and automations (#12, #32).
@@ -15,6 +15,9 @@
 - Locks that report their state as a number (0 = unlocked; 1 or 255 = locked) no longer stay stuck as unknown / "Locking…" in HomeKit. Any other value is still shown as unknown, and the raw value is logged once so it can be added (#121).
 - Combo smoke/CO detectors (equipment codes 4040/4050) now appear as Smoke and Carbon Monoxide sensors, and PIR3 motion sensors (4020) as motion sensors, instead of contact sensors (#144, #172). **These accessories are re-created once after updating: re-assign their room and any automations in the Home app.**
 - Real-time updates (motion, doorbell, camera events) no longer stop for good after a network or PubNub outage. The plugin now reconnects with backoff after PubNub gives up retrying, and resubscribes if the stream has been silent for an hour. It logs one line when the connection is lost and one when it is restored (#172).
+
+## 2.0.0-beta (2026-11-24)
+### Fixes
 - A failed command (lock, arm/disarm, garage door, thermostat) no longer crashes Homebridge, and the failure is now reported to HomeKit instead of showing success.
 - One malformed real-time message no longer stops all further device updates.
 - An expired or revoked refresh token is reported clearly once instead of retrying the login forever.
