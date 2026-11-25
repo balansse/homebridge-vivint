@@ -5,6 +5,7 @@
 - Accounts with several Vivint systems: the log lists every system on startup, and the new `panelId` setting picks which one to use (default: the first, as before). Changing it replaces the accessories of the previous system (#133).
 
 ### Fixes
+- A Vivint error while Homebridge starts (for example an HTTP 500 when loading the system) no longer leaves every accessory at "No Response" until the next restart. The plugin retries after 1, 2 and 5 minutes, then every 5 minutes, and logs one line per attempt; accessories show "No Response" while it waits. An expired refresh token, an unknown `panelId` or an unsupported account type is still reported once, without retrying (#204).
 - Cameras without audio can stream again: since 1.11 an audio stream was always requested, and ffmpeg refuses to start when the camera has no audio track.
 - Camera streams are cleaned up reliably: HomeKit is told a stream started when video is flowing (or after 2.5 seconds, to stay within HomeKit's time limit), a stream that sends no video within 15 seconds is stopped, a stream that fails or dies frees its slot right away, at most two streams run per camera, and every ffmpeg process is stopped when Homebridge shuts down. This should stop the doorbell camera from becoming unavailable after a ring (#134).
 - On accounts with several systems, real-time updates from another system no longer change this system's accessories when device IDs overlap (#133).

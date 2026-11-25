@@ -6,24 +6,42 @@ const VivintApiModule = require("./lib/vivint_api.js")
 const DeviceSetModule = require("./lib/device_set.js")
 const { describeError } = require("./lib/http.js")
 const PubNubSupervisor = require("./lib/pubnub_supervisor.js")
+const { startWithRetry, StartupCancelled } = require("./lib/startup_retry.js")
 
 module.exports = function (homebridge) {
   Service = homebridge.hap.Service;
 
-  // Make every characteristic of the given accessories report an error, so HomeKit shows
-  // "No Response" instead of stale values when the platform could not start.
-  function setCatastrophe(accessories) {
+  // Answers HomeKit reads with an error, so HomeKit shows "No Response" instead of stale values
+  // while the platform could not start. One shared handler, so it can be removed again.
+  function failGet(next) {
+    next(new Error("Platform failed to initialize"))
+  }
+
+  function forEachCharacteristic(accessories, fn) {
     accessories.forEach((accessory) => {
       accessory.services
       .filter((service) => service.UUID !== Service.AccessoryInformation.UUID)
-      .forEach((service) => {
-        service.characteristics.forEach((characteristic) => {
-          characteristic.on('get', (next) => {
-            next(new Error("Platform failed to initialize"))
-          })
-        })
-      })
+      .forEach((service) => service.characteristics.forEach(fn))
     })
+  }
+
+  // Make every characteristic of the given accessories report an error. Safe to call repeatedly.
+  function setCatastrophe(accessories) {
+    forEachCharacteristic(accessories, (characteristic) => {
+      characteristic.removeListener('get', failGet)
+      characteristic.on('get', failGet)
+    })
+  }
+
+  // Undo setCatastrophe once a later startup attempt succeeds. Must run before the devices bind their own
+  // 'get' handlers: HAP answers with the first handler that calls back.
+  function clearCatastrophe(accessories) {
+    forEachCharacteristic(accessories, (characteristic) => characteristic.removeListener('get', failGet))
+  }
+
+  function formatDelay(ms) {
+    const secs = Math.round(ms / 1000)
+    return secs % 60 === 0 ? `${secs / 60} minute${secs === 60 ? '' : 's'}` : `${secs} seconds`
   }
 
   class VivintPlatform {
@@ -36,6 +54,8 @@ module.exports = function (homebridge) {
       this.pubNub = null
       this.pubNubSupervisor = null
       this.deviceSet = null
+      this.startup = null
+      this.stopped = false
 
       if (!config || !config.refreshToken) {
         log.error("No refresh token configured. Open the plugin settings to log in to Vivint and generate one.")
@@ -45,21 +65,55 @@ module.exports = function (homebridge) {
       let config_apiLoginRefreshSecs = config.apiLoginRefreshSecs || 1200 // once per 20 minutes default
 
       let VivintApi = VivintApiModule(config, log)
+      // Shared by every attempt: a login stores the rotated refresh token here
+      const creds = {refreshToken: config.refreshToken}
       // Start logging in right away; bootstrapping waits until cached accessories are restored.
-      this.vivintApiPromise = VivintApi.login({refreshToken: config.refreshToken})
+      this.vivintApiPromise = VivintApi.login(creds)
       // Avoid an unhandled rejection before didFinishLaunching attaches its handlers
       this.vivintApiPromise.catch(() => {})
 
       const launched = new Promise((resolve) => api.on('didFinishLaunching', resolve))
 
+      // Login and PubNub connect are retried with backoff after errors a later attempt can fix (#204).
+      // An invalid refresh token or a configuration error is final.
+      const connect = async (attempt) => {
+        const vivintApi = await (attempt === 1 ? this.vivintApiPromise : VivintApi.login(creds))
+        if (this.stopped) throw new StartupCancelled()
+        const pubNub = await vivintApi.connectPubNub()
+        if (this.stopped) {
+          this.stopPubNub(pubNub)
+          throw new StartupCancelled()
+        }
+        return { vivintApi, pubNub }
+      }
+
       this.initialLoad = launched
-        .then(() => this.vivintApiPromise)
-        .then(async (vivintApi) => {
-          let pubNub = await vivintApi.connectPubNub()
+        .then(() => {
+          if (this.stopped) throw new StartupCancelled()
+          this.startup = startWithRetry(connect, {
+            shouldRetry: (error) => !(error instanceof VivintApiModule.VivintAuthError ||
+              error instanceof VivintApiModule.VivintConfigError || error instanceof StartupCancelled),
+            onRetry: (error, delayMs) => {
+              log.error(`Could not connect to Vivint (${describeError(error)}). Retrying in ${formatDelay(delayMs)}.`)
+              setCatastrophe(this.cachedAccessories)
+            },
+          })
+          return this.startup.promise
+        })
+        .then(({ result: { vivintApi, pubNub }, attempts }) => {
+          this.startup = null
+          if (this.stopped) return this.stopPubNub(pubNub)
+          if (attempts > 1) {
+            log.info(`Connected to Vivint after ${attempts} attempts`)
+            clearCatastrophe(this.cachedAccessories)
+          }
           this.pubNub = pubNub
+          // Runs once: it registers new accessories, so it is never retried
           this.bootstrap(vivintApi, pubNub, config_apiLoginRefreshSecs)
         })
         .catch((error) => {
+          this.startup = null
+          if (error instanceof StartupCancelled) return
           if (error instanceof VivintApiModule.VivintAuthError || error instanceof VivintApiModule.VivintConfigError) {
             log.error(error.message)
           } else {
@@ -172,17 +226,21 @@ module.exports = function (homebridge) {
     }
 
     shutdown() {
+      this.stopped = true
+      if (this.startup) this.startup.cancel()
       this.timers.forEach((t) => clearInterval(t))
       this.timers = []
       if (this.deviceSet) this.deviceSet.destroy()
       if (this.pubNubSupervisor) this.pubNubSupervisor.destroy()
-      if (this.pubNub) {
-        try {
-          this.pubNub.unsubscribeAll()
-          this.pubNub.stop()
-        } catch (err) {
-          this.log.debug("Error stopping PubNub:", describeError(err))
-        }
+      if (this.pubNub) this.stopPubNub(this.pubNub)
+    }
+
+    stopPubNub(pubNub) {
+      try {
+        pubNub.unsubscribeAll()
+        pubNub.stop()
+      } catch (err) {
+        this.log.debug("Error stopping PubNub:", describeError(err))
       }
     }
 
