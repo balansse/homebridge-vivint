@@ -125,7 +125,8 @@ describe('VivintApi', function () {
     it('reports a smarthomesystem-only account as not supported yet (#82)', async function () {
       script = [{ body: { u: { mbc: 'c', system: [], smarthomesystem: [{ panid: 77 }] } } }]
       await assert.rejects(VivintApi.login({ refreshToken: 's=x' }),
-        /This Vivint account type is not supported yet \(smarthomesystem\)\. Please comment on https:\/\/github\.com\/balansse\/homebridge-vivint\/issues\/82/)
+        (err) => err instanceof VivintApiModule.VivintConfigError && // final: the startup is not retried (#204)
+          /This Vivint account type is not supported yet \(smarthomesystem\)\. Please comment on https:\/\/github\.com\/balansse\/homebridge-vivint\/issues\/82/.test(err.message))
       assert.strictEqual(calls.length, 1, 'nothing else requested')
     })
 

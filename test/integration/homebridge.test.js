@@ -704,6 +704,66 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       hb2.assertAlive()
       assert.strictEqual(mock.vivintRequests((r) => r.path === '/api/authuser').length - authBefore, 1, 'no login retries on 401')
       assert.ok(!hb2.log.includes('EXPIRED_TOKEN'), 'token not logged')
+      assert.doesNotMatch(hb2.log, /Retrying in/, 'an invalid token is final (#204)')
+    })
+
+    // A Vivint error while starting used to leave every accessory at "No Response" until a restart (#204)
+    const failSystemFetch = (times) => mock.override((r) => r.path === `/api/systems/${PANEL_ID}`, { status: 500, body: { msg: 'mock failure' }, times })
+    const RETRY_LINE = /Could not connect to Vivint \(GET \/api\/systems\/13 failed: HTTP 500\)\. Retrying in 1 minute\./
+
+    it('shuts down promptly while waiting to retry a failed start (#204)', async function () {
+      await hb2.stop()
+      failSystemFetch(1)
+      hb2 = new HomebridgeProcess({
+        storage: hb.storage, hapPort: hb.hapPort, mockPort, certPath: certs.cert,
+        platformConfig: { motionDetectedOccupancySensorMins: 1, lowBatteryLevel: 15 },
+      })
+      hb2.start()
+      await waitFor(() => RETRY_LINE.test(hb2.log), { timeout: 60000, message: 'retry message' })
+      assert.doesNotMatch(hb2.log, /Error while bootstrapping accessories/)
+      // The pending retry timer must not keep Homebridge alive (Homebridge 2.x exits once the event loop is empty)
+      hb2.assertAlive()
+      const t0 = Date.now()
+      assert.ok(await hb2.stop(), 'exited')
+      const hbMajor = Number(require(path.join(HB_PROJECT, 'node_modules', 'homebridge', 'package.json')).version.split('.')[0])
+      const limit = hbMajor >= 2 ? 3000 : 6500
+      assert.ok(Date.now() - t0 < limit, `shutdown took ${Date.now() - t0}ms (limit ${limit}ms on Homebridge ${hbMajor}.x)`)
+      assert.ok(!FATAL_PATTERNS.some((p) => p.test(hb2.log)), hb2.tail(80))
+    })
+
+    it('retries a failed start and recovers without a restart (#204)', async function () {
+      failSystemFetch(1)
+      hb2 = new HomebridgeProcess({
+        storage: hb.storage, hapPort: hb.hapPort, mockPort, certPath: certs.cert,
+        platformConfig: { motionDetectedOccupancySensorMins: 1, lowBatteryLevel: 15 },
+      })
+      hb2.start()
+      await waitFor(() => RETRY_LINE.test(hb2.log), { timeout: 60000, message: 'retry message' })
+      const systemFetches = () => mock.vivintRequests((r) => r.path === `/api/systems/${PANEL_ID}`).length
+      const fetchesBefore = systemFetches()
+
+      // While waiting, cached accessories report errors instead of stale values
+      const lock = await waitFor(() => hap.find('Front Door', T.LockMechanism, T.LockCurrentState), { message: 'cached lock' })
+      const failing = await hap.get(lock)
+      assert.notStrictEqual(failing.status, undefined, `expected an error status, got ${JSON.stringify(failing)}`)
+
+      await waitFor(() => /Connected to Vivint after 2 attempts/.test(hb2.log), { timeout: 75000, message: 'second attempt' })
+      assert.strictEqual(systemFetches() - fetchesBefore, 1, 'one more system fetch')
+      // (No "Removing 0" check: an earlier test leaves a re-classified accessory in the cache)
+      await waitFor(() => /Adding \d+ accessories/.test(hb2.log), { timeout: 10000, message: 'bootstrap after retry' })
+
+      // The accessories answer again (the error handler is gone) and real-time updates arrive
+      const ok = await waitFor(async () => {
+        const res = await hap.get(lock)
+        return res.status === undefined && res
+      }, { message: 'lock answers after the retry' })
+      assert.strictEqual(ok.value, 1, 'secured')
+      await waitFor(() => mock.pendingSubscribes.length > 0, { message: 'PubNub subscribe after retry' })
+      const contact = await hap.find('Basement Window', T.ContactSensor, T.ContactSensorState)
+      mock.pushPubNub({ _id: `${PANEL_ID}|${PARTITION_ID}`, t: 'account_partition', da: { plctx: { ts: '2026-11-24T16:00:00.000000' }, d: [{ _id: 42, s: true }] } })
+      await waitFor(async () => (await hap.get(contact)).value === 1, { message: 'contact update after retry' })
+      hb2.assertAlive()
+      assert.ok(!FATAL_PATTERNS.some((p) => p.test(hb2.log)), hb2.tail(80))
     })
 
     // Accessory cache written by Homebridge; strip `panelId` to simulate a cache from a version before 2.0.0-beta.1
