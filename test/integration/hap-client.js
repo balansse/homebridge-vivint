@@ -16,6 +16,7 @@ const T = {
   HeatingThresholdTemperature: '12', CoolingThresholdTemperature: '0D', TemperatureDisplayUnits: '36',
   Fan: '40', Lightbulb: '43', Switch: '49', On: '25', Brightness: '8',
   Battery: '96', BatteryLevel: '68', StatusLowBattery: '79',
+  Doorbell: '121', ProgrammableSwitchEvent: '73',
   CameraRTPStreamManagement: '110', SetupEndpoints: '118', SelectedRTPStreamConfiguration: '117', StreamingStatus: '120',
 }
 

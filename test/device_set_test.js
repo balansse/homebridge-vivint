@@ -96,7 +96,7 @@ const Characteristic = {
   SecuritySystemTargetState: { name: 'SecuritySystemTargetState', STAY_ARM: 0, AWAY_ARM: 1, NIGHT_ARM: 2, DISARM: 3 },
 }
 
-const Categories = { OTHER: 1, SECURITY_SYSTEM: 11, DOOR_LOCK: 6, DOOR: 12, WINDOW: 13, SENSOR: 10 }
+const Categories = { OTHER: 1, SECURITY_SYSTEM: 11, DOOR_LOCK: 6, DOOR: 12, WINDOW: 13, SENSOR: 10, IP_CAMERA: 17, VIDEO_DOORBELL: 18 }
 
 const MockHomebridge = {
   platformAccessory: MockPlatformAccessory,
@@ -275,6 +275,28 @@ describe('DeviceSet', function () {
         assert.strictEqual(smoke.valueOf(Characteristic.SmokeDetected), Characteristic.SmokeDetected.SMOKE_DETECTED)
         assert.strictEqual(co.valueOf(Characteristic.CarbonMonoxideDetected), Characteristic.CarbonMonoxideDetected.CO_LEVELS_ABNORMAL)
         assert.strictEqual(motion.valueOf(Characteristic.MotionDetected), true)
+      })
+    })
+
+    describe('doorbell cameras (#12, #32)', function () {
+      const cameraData = (Name, Id = 71) => ({ Id, Type: VivintDict.PanelDeviceType.Camera, Name })
+      const isDoorbellAccessory = (accessory) => accessory.category === Categories.VIDEO_DOORBELL && Boolean(accessory.getService(Service.ContactSensor))
+
+      it('sets up a camera named "...Doorbell" as a doorbell', function () {
+        const doorbell = DeviceSet.createDeviceAccessory(cameraData('Front Doorbell', 70))
+        assert.strictEqual(doorbell.context.deviceClassName, 'Camera')
+        assert.ok(isDoorbellAccessory(doorbell))
+        assert.ok(doorbell.getService(Service.MotionSensor))
+        const camera = DeviceSet.createDeviceAccessory(cameraData('Front Door'))
+        assert.strictEqual(camera.category, Categories.IP_CAMERA)
+        assert.ok(!camera.getService(Service.ContactSensor))
+      })
+
+      it('sets up cameras listed in doorbellCameraIds (by ID or name) as doorbells', function () {
+        DeviceSet = DeviceSetModule({ doorbellCameraIds: ['71', 'Side Gate'] }, silentLog, MockHomebridge, mockVivintApi)
+        assert.ok(isDoorbellAccessory(DeviceSet.createDeviceAccessory(cameraData('Front Door', 71))))
+        assert.ok(isDoorbellAccessory(DeviceSet.createDeviceAccessory(cameraData('Side Gate', 72))))
+        assert.ok(!isDoorbellAccessory(DeviceSet.createDeviceAccessory(cameraData('Garage', 73))))
       })
     })
 

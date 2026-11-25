@@ -53,17 +53,29 @@ const available = ffmpegPath && fs.existsSync(ffmpegPath)
     socket.bind(0, '127.0.0.1', () => resolve(socket))
   })
 
+  // A free UDP port for ffmpeg's local RTCP socket (port+1 of a receiving socket may be taken, e.g. by the other one)
+  const freeUdpPort = () => new Promise((resolve) => {
+    const socket = dgram.createSocket('udp4')
+    socket.bind(0, '127.0.0.1', () => {
+      const { port } = socket.address()
+      socket.close(() => resolve(port))
+    })
+  })
+
   /** Streams `file` with the plugin's arguments until video packets arrive (or ffmpeg exits / 10s pass). */
   async function stream({ mode, file, withAudio }) {
     const video = await bind()
     const audio = await bind()
+    const returnVideoPort = await freeUdpPort()
+    let returnAudioPort = await freeUdpPort()
+    while (returnAudioPort === returnVideoPort) returnAudioPort = await freeUdpPort()
     const key = Buffer.alloc(30, 7)
     const args = Camera.buildStreamArgs({
       mode, rtspTransport: 'tcp', rtspUrl: 'RTSP_URL', withAudio,
       request: { video: { width: 640, height: 360, fps: 30, pt: 99 }, audio: { pt: 110 } },
       session: {
-        address: '127.0.0.1', videoPort: video.address().port, returnVideoPort: video.address().port + 1, videoSSRC: 1, videoSRTP: key,
-        audioPort: audio.address().port, returnAudioPort: audio.address().port + 1, audioSSRC: 2, audioSRTP: key,
+        address: '127.0.0.1', videoPort: video.address().port, returnVideoPort, videoSSRC: 1, videoSRTP: key,
+        audioPort: audio.address().port, returnAudioPort, audioSSRC: 2, audioSRTP: key,
       },
     })
     // A local file instead of RTSP: drop the RTSP transport option, read in real time like a camera
