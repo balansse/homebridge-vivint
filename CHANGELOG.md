@@ -1,8 +1,11 @@
 ## Unreleased
 ### Changes
+- Camera live view passes the camera's video through unchanged again (the 1.10 behaviour) instead of re-encoding it with libx264, which was CPU-heavy and broke live view for many users since 1.11 (#171, #174). The new `videoProcessing` setting switches back to transcoding (`transcode`), which may be needed for viewing away from home. Audio (AAC-ELD) works in both modes. New `rtspTransport` setting (`tcp` default, or `udp`).
 - Accounts with several Vivint systems: the log lists every system on startup, and the new `panelId` setting picks which one to use (default: the first, as before). Changing it replaces the accessories of the previous system (#133).
 
 ### Fixes
+- Cameras without audio can stream again: since 1.11 an audio stream was always requested, and ffmpeg refuses to start when the camera has no audio track.
+- Camera streams are cleaned up reliably: HomeKit is told a stream started when video is flowing (or after 2.5 seconds, to stay within HomeKit's time limit), a stream that sends no video within 15 seconds is stopped, a stream that fails or dies frees its slot right away, at most two streams run per camera, and every ffmpeg process is stopped when Homebridge shuts down. This should stop the doorbell camera from becoming unavailable after a ring (#134).
 - On accounts with several systems, real-time updates from another system no longer change this system's accessories when device IDs overlap (#133).
 - Clearer diagnostics: an HTTP 403 from Vivint is reported as a Cloudflare block ("try again later or from another network") instead of a wrong password (#107); accounts that only have a `smarthomesystem` are reported as not supported yet instead of "No Vivint system found" (#82); Nest entries no longer show up as "Device not (yet) supported" (#176); network errors with an empty message (such as a failed connection to every address of a host) are logged as a readable one-line reason (#151, #173).
 - Locks that report their state as a number (0 = unlocked; 1 or 255 = locked) no longer stay stuck as unknown / "Locking…" in HomeKit. Any other value is still shown as unknown, and the raw value is logged once so it can be added (#121).

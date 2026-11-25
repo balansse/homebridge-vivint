@@ -67,6 +67,26 @@
           "description": "Stream camera feeds from Vivint servers instead of streaming directly from the Panel.",
           "type": "boolean"
         },
+        "videoProcessing": {
+          "title": "Camera live view video",
+          "description": "'Pass through' sends the camera's video to HomeKit unchanged (the 1.10 behaviour; light on CPU). 'Transcode' re-encodes it at the size HomeKit asks for (1.11 - 1.12 behaviour; CPU-heavy, may be needed for viewing away from home / over cellular).",
+          "type": "string",
+          "default": "copy",
+          "oneOf": [
+            { "title": "Pass through (default)", "enum": ["copy"] },
+            { "title": "Transcode (libx264)", "enum": ["transcode"] }
+          ]
+        },
+        "rtspTransport": {
+          "title": "Camera stream transport",
+          "description": "How the plugin reads camera streams from the panel. TCP is the most reliable; try UDP only if streams don't start.",
+          "type": "string",
+          "default": "tcp",
+          "oneOf": [
+            { "title": "TCP (default)", "enum": ["tcp"] },
+            { "title": "UDP", "enum": ["udp"] }
+          ]
+        },
         "showCameraConfig": {
           "title": "Show camera config",
           "description": "Shows configuration for all detected cameras in the log",

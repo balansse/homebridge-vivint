@@ -3,6 +3,7 @@
 // so the plugin's real HTTP / PubNub client code is exercised end-to-end.
 
 const https = require('https')
+const net = require('net')
 const { URL } = require('url')
 
 const SENTINELS = {
@@ -41,6 +42,8 @@ function devices() {
       ciu: ['rtsp://127.0.0.1:9/cam-hd'], cius: ['rtsp://127.0.0.1:9/cam-sd'],
       ceu: ['rtsp://127.0.0.1:9/ext-hd'], ceus: ['rtsp://127.0.0.1:9/ext-sd'],
     },
+    // Points at a server that accepts connections and never answers (URL set in MockVivint.start)
+    { _id: 71, t: 'camera_device', n: 'Garage Camera', ciu: ['rtsp://127.0.0.1:9/garage'] },
   ]
 }
 
@@ -82,13 +85,25 @@ class MockVivint {
     this.server = https.createServer({ cert, key }, (req, res) => this._handle(req, res))
   }
 
-  start() {
+  async start() {
+    // A "camera" that accepts the RTSP connection and never replies
+    this.hangSockets = []
+    this.hangServer = net.createServer((socket) => {
+      this.hangSockets.push(socket)
+      socket.on('error', () => {})
+    })
+    await new Promise((resolve) => this.hangServer.listen(0, '127.0.0.1', resolve))
+    this.deviceOverrides[71] = { ciu: [`rtsp://127.0.0.1:${this.hangServer.address().port}/hang`] }
     return new Promise((resolve) => {
       this.server.listen(0, '127.0.0.1', () => resolve(this.server.address().port))
     })
   }
 
   stop() {
+    if (this.hangServer) {
+      this.hangSockets.forEach((s) => s.destroy())
+      this.hangServer.close()
+    }
     for (const res of this.pendingSubscribes) {
       try { res.destroy() } catch (_) {}
     }

@@ -12,7 +12,7 @@ const os = require('os')
 const path = require('path')
 
 const { MockVivint, SENTINELS, PANEL_ID, PARTITION_ID, SECOND_PANEL_ID, SECOND_PARTITION_ID, SNAPSHOT_TS } = require('./mock-vivint')
-const { HapClient, T } = require('./hap-client')
+const { HapClient, T, tlv, tlvDecode, u8, u16, u32, f32 } = require('./hap-client')
 
 const HB_PROJECT = process.env.HB_PROJECT
 const PIN = '031-45-154'
@@ -474,6 +474,94 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       const res = await hap.snapshot(cam.aid)
       assert.notStrictEqual(res.status, 200, 'no image expected from an unreachable stream')
       await sleep(500)
+      hb.assertAlive()
+    })
+
+    // HomeKit's live-stream setup over HAP: SetupEndpoints, then SelectedRTPStreamConfiguration START
+    // HAP ties a stream session to the connection that set it up and ends it when that connection closes,
+    // so (like a real controller) every request of a session goes over one keep-alive connection.
+    const crypto = require('crypto')
+    const http = require('http')
+    let streamAgents = []
+    afterEach(() => { streamAgents.forEach((a) => a.destroy()); streamAgents = [] })
+    const streamSetup = async (cameraName, videoPort) => {
+      const agent = new http.Agent({ keepAlive: true, maxSockets: 1 })
+      streamAgents.push(agent)
+      const hap = new HapClient(hb.hapPort, PIN, { agent })
+      const cam = (await hap.accessories()).find((a) => a.name === cameraName)
+      const rtp = cam.services.find((s) => s.type === T.CameraRTPStreamManagement)
+      const ref = (type) => ({ aid: cam.aid, iid: rtp.characteristics.find((c) => c.type === type).iid })
+      const srtp = () => tlv(1, u8(0), 2, crypto.randomBytes(16), 3, crypto.randomBytes(14))
+      const setup = async () => {
+        const sessionId = crypto.randomBytes(16)
+        const value = tlv(1, sessionId, 3, tlv(1, u8(0), 2, '127.0.0.1', 3, u16(videoPort), 4, u16(videoPort + 2)), 4, srtp(), 5, srtp())
+        const res = await hap.set(ref(T.SetupEndpoints), value.toString('base64'))
+        const status = tlvDecode(Buffer.from((await hap.get(ref(T.SetupEndpoints))).value, 'base64'))[2][0]
+        return { res, status, sessionId }
+      }
+      const start = (sessionId) => hap.set(ref(T.SelectedRTPStreamConfiguration), tlv(
+        1, tlv(1, sessionId, 2, u8(1)), // session control: START
+        2, tlv( // selected video: H.264 baseline 3.1, 640x360@30
+          1, u8(0),
+          2, tlv(1, u8(0), 2, u8(0), 3, u8(0)),
+          3, tlv(1, u16(640), 2, u16(360), 3, u8(30)),
+          4, tlv(1, u8(99), 2, u32(1234), 3, u16(299), 4, f32(0.5), 5, u16(1378)),
+        ),
+        3, tlv( // selected audio: Opus 16 kHz mono
+          1, u8(3),
+          2, tlv(1, u8(1), 2, u8(0), 3, u8(1), 4, u8(20)),
+          3, tlv(1, u8(110), 2, u32(5678), 3, u16(24), 4, f32(5), 6, u8(13)),
+          4, u8(0),
+        ),
+      ).toString('base64'))
+      return { setup, start }
+    }
+    const streamFfmpegRunning = (videoPort) => cp.execFileSync('ps', ['-A', '-o', 'args='], { encoding: 'utf8' })
+      .split('\n').some((l) => l.includes(`srtp://127.0.0.1:${videoPort}?`))
+
+    it('answers a live-stream start with an error when the camera is unreachable, and frees the stream slot (#134)', async function () {
+      // The mock camera URL (rtsp://127.0.0.1:9) refuses connections, so real ffmpeg exits before sending video
+      const stream = await streamSetup('Front Doorbell', 55000)
+      const first = await stream.setup()
+      assert.strictEqual(first.res.status, 0)
+      assert.strictEqual(first.status, 0, 'SetupEndpoints SUCCESS')
+
+      const logStart = hb.log.length
+      const res = await stream.start(first.sessionId)
+      assert.notStrictEqual(res.status, 0, `expected the START to fail, got ${JSON.stringify(res)}`)
+      const log = hb.log.slice(logStart)
+      assert.match(log, /\[Front Doorbell\] Starting stream for session \S+ \(video: copy, audio: no, RTSP over tcp\)/)
+      assert.match(log, /Stream for session \S+ failed: ffmpeg exited with code \d+ before sending video/)
+      assert.ok(log.includes('-codec:v copy'), 'copy pipeline used by default')
+
+      const again = await stream.setup()
+      assert.strictEqual(again.status, 0, 'SetupEndpoints SUCCESS again (not BUSY)')
+      assert.ok(!streamFfmpegRunning(55000), 'no leftover stream ffmpeg')
+      hb.assertAlive()
+    })
+
+    it('answers a live-stream start in time when the camera hangs, then stops it after 15s without video (#134)', async function () {
+      this.timeout(60000)
+      const stream = await streamSetup('Garage Camera', 55010)
+      const first = await stream.setup()
+      assert.strictEqual(first.status, 0, 'SetupEndpoints SUCCESS')
+
+      const logStart = hb.log.length
+      const t0 = Date.now()
+      const res = await stream.start(first.sessionId)
+      const answeredAfter = Date.now() - t0
+      assert.strictEqual(res.status, 0, `START answered with ${JSON.stringify(res)}`)
+      assert.ok(answeredAfter < 3000, `answered after ${answeredAfter}ms (HAP warns at 3s)`)
+      assert.ok(streamFfmpegRunning(55010), 'ffmpeg is waiting for the camera')
+      assert.ok(mock.hangSockets.length > 0, 'ffmpeg connected to the hanging camera')
+
+      // Still in use until the watchdog fires
+      assert.strictEqual((await stream.setup()).status, 1, 'BUSY while the stream is open')
+      await waitFor(() => /\[Garage Camera\] No video from the camera within 15s; stopping stream/.test(hb.log.slice(logStart)),
+        { timeout: 25000, message: 'first-frame watchdog' })
+      await waitFor(async () => (await stream.setup()).status === 0, { timeout: 5000, message: 'stream slot released' })
+      await waitFor(() => !streamFfmpegRunning(55010), { timeout: 5000, message: 'ffmpeg killed' })
+      assert.doesNotMatch(hb.log.slice(logStart), /slow to respond|didn't respond at all/)
       hb.assertAlive()
     })
   })
