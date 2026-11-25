@@ -11,11 +11,15 @@ const os = require('os')
 const path = require('path')
 const Camera = require('../lib/accessories/camera.js')
 
-let ffmpegPath
-try {
-  ffmpegPath = require('ffmpeg-for-homebridge')
-} catch (_) {
-  ffmpegPath = undefined
+// FFMPEG_PATH: set by test/integration/run.js to the ffmpeg installed with the packed plugin (CI's unit job installs
+// with --ignore-scripts, so ffmpeg-for-homebridge's binary is only downloaded in the integration setup).
+let ffmpegPath = process.env.FFMPEG_PATH
+if (!ffmpegPath) {
+  try {
+    ffmpegPath = require('ffmpeg-for-homebridge')
+  } catch (_) {
+    ffmpegPath = undefined
+  }
 }
 
 const available = ffmpegPath && fs.existsSync(ffmpegPath)
