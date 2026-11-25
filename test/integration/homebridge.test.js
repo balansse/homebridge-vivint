@@ -516,12 +516,14 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       ).toString('base64'))
       return { setup, start }
     }
+    // Per-run SRTP target ports, so `ps` checks can't see another test run's ffmpeg (e.g. HB1 and HB2 suites in parallel)
+    const streamPortBase = 50000 + (process.pid % 2000) * 4
     const streamFfmpegRunning = (videoPort) => cp.execFileSync('ps', ['-A', '-o', 'args='], { encoding: 'utf8' })
       .split('\n').some((l) => l.includes(`srtp://127.0.0.1:${videoPort}?`))
 
     it('answers a live-stream start with an error when the camera is unreachable, and frees the stream slot (#134)', async function () {
       // The mock camera URL (rtsp://127.0.0.1:9) refuses connections, so real ffmpeg exits before sending video
-      const stream = await streamSetup('Front Doorbell', 55000)
+      const stream = await streamSetup('Front Doorbell', streamPortBase)
       const first = await stream.setup()
       assert.strictEqual(first.res.status, 0)
       assert.strictEqual(first.status, 0, 'SetupEndpoints SUCCESS')
@@ -536,13 +538,13 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
 
       const again = await stream.setup()
       assert.strictEqual(again.status, 0, 'SetupEndpoints SUCCESS again (not BUSY)')
-      assert.ok(!streamFfmpegRunning(55000), 'no leftover stream ffmpeg')
+      assert.ok(!streamFfmpegRunning(streamPortBase), 'no leftover stream ffmpeg')
       hb.assertAlive()
     })
 
     it('answers a live-stream start in time when the camera hangs, then stops it after 15s without video (#134)', async function () {
       this.timeout(60000)
-      const stream = await streamSetup('Garage Camera', 55010)
+      const stream = await streamSetup('Garage Camera', streamPortBase + 4000)
       const first = await stream.setup()
       assert.strictEqual(first.status, 0, 'SetupEndpoints SUCCESS')
 
@@ -552,7 +554,7 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       const answeredAfter = Date.now() - t0
       assert.strictEqual(res.status, 0, `START answered with ${JSON.stringify(res)}`)
       assert.ok(answeredAfter < 3000, `answered after ${answeredAfter}ms (HAP warns at 3s)`)
-      assert.ok(streamFfmpegRunning(55010), 'ffmpeg is waiting for the camera')
+      assert.ok(streamFfmpegRunning(streamPortBase + 4000), 'ffmpeg is waiting for the camera')
       assert.ok(mock.hangSockets.length > 0, 'ffmpeg connected to the hanging camera')
 
       // Still in use until the watchdog fires
@@ -560,7 +562,7 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       await waitFor(() => /\[Garage Camera\] No video from the camera within 15s; stopping stream/.test(hb.log.slice(logStart)),
         { timeout: 25000, message: 'first-frame watchdog' })
       await waitFor(async () => (await stream.setup()).status === 0, { timeout: 5000, message: 'stream slot released' })
-      await waitFor(() => !streamFfmpegRunning(55010), { timeout: 5000, message: 'ffmpeg killed' })
+      await waitFor(() => !streamFfmpegRunning(streamPortBase + 4000), { timeout: 5000, message: 'ffmpeg killed' })
       assert.doesNotMatch(hb.log.slice(logStart), /slow to respond|didn't respond at all/)
       hb.assertAlive()
     })
@@ -786,9 +788,11 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
         return { aid: acc.aid, types: acc.services.map((s) => s.type) }
       }
 
+      // Lines logged right after "Adding N accessories" can arrive in a later stdout chunk: wait for them
+      const waitForLog = (re, message) => waitFor(() => re.test(hb2.log), { timeout: 10000, message })
       await startHb2({ doorbellCameraIds: ['Garage Camera'] })
-      assert.match(hb2.log, /Camera \[Garage Camera\] \[ID\]:71 is set up as a doorbell/)
-      assert.match(hb2.log, /Camera \[Front Doorbell\] \[ID\]:70 is set up as a doorbell/)
+      await waitForLog(/Camera \[Garage Camera\] \[ID\]:71 is set up as a doorbell/, 'Garage Camera set up as a doorbell')
+      await waitForLog(/Camera \[Front Doorbell\] \[ID\]:70 is set up as a doorbell/, 'Front Doorbell set up as a doorbell')
       const asDoorbell = await waitFor(async () => {
         const s = await services('Garage Camera')
         return s.types.includes(T.Doorbell) && s
@@ -807,7 +811,8 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       await startHb2({})
       assert.match(hb2.log, /Removing 0 accessories/)
       assert.match(hb2.log, /Adding 0 accessories/)
-      assert.match(hb2.log, /Camera \[Garage Camera\] \[ID\]:71 is set up as a camera\. If it is a doorbell, add its name or ID to "doorbellCameraIds"/)
+      await waitForLog(/Camera \[Garage Camera\] \[ID\]:71 is set up as a camera\. If it is a doorbell, add its name or ID to "doorbellCameraIds"/,
+        'Garage Camera set up as a camera')
       const asCamera = await waitFor(async () => {
         const s = await services('Garage Camera')
         return !s.types.includes(T.Doorbell) && s
