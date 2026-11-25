@@ -118,6 +118,7 @@ Configuration options overview:
 * **doorbellCameraIds** - Cameras whose name contains "doorbell" are set up as doorbells (ring notifications and a "Button" sensor). If your doorbell camera has another name (for example "Front Door"), add its name or ID here; the log lists every camera with its ID on startup. Adding or removing a camera here keeps the accessory (no re-pairing); its room and automations stay.
 * **videoProcessing** - How camera live view is sent to HomeKit. `copy` (default) passes the camera's H.264 video through unchanged, like version 1.10, which uses little CPU. `transcode` re-encodes it with libx264 at the size HomeKit requests, like versions 1.11 - 1.12; it is CPU-heavy (slow on a Raspberry Pi) but may be needed if live view works at home and fails away from home or over cellular.
 * **rtspTransport** - `tcp` (default) or `udp`: how the plugin reads camera streams from the panel. Change it only if streams don't start.
+* **snapshotStream** - Which camera stream the Home app's preview images (snapshots) are taken from: `sd` (default) uses the standard-definition stream, like version 1.10, and falls back to HD for cameras without one; `hd` always uses the HD stream (versions 1.11 - 2.0.0-beta.1). A snapshot that takes longer than 20 seconds is stopped, just before HomeKit gives up waiting.
 * **showCameraConfig** - Log [homebridge-camera-ffmpeg](https://github.com/Sunoo/homebridge-camera-ffmpeg) configuration for all detected cameras.
 
 ## Credits

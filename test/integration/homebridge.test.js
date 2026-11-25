@@ -471,9 +471,38 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
     it('answers a snapshot request when the stream is unreachable, without crashing', async function () {
       const accs = await hap.accessories()
       const cam = accs.find((a) => a.name === 'Front Doorbell')
+      const logStart = hb.log.length
       const res = await hap.snapshot(cam.aid)
       assert.notStrictEqual(res.status, 200, 'no image expected from an unreachable stream')
+      // Snapshots come from the SD stream when the camera has one (#205)
+      await waitFor(() => /Snapshot for 'Front Doorbell' from the SD stream/.test(hb.log.slice(logStart)), { timeout: 5000, message: 'SD stream log line' })
       await sleep(500)
+      hb.assertAlive()
+    })
+
+    it('answers snapshots of a hanging camera at 20s with one ffmpeg, then stops it (#205)', async function () {
+      // Garage Camera has only an HD stream, pointing at a server that accepts the connection and never answers
+      const cam = (await hap.accessories()).find((a) => a.name === 'Garage Camera')
+      const hangUrl = mock.deviceOverrides[71].ciu[0]
+      const snapshotFfmpegs = () => cp.execFileSync('ps', ['-A', '-o', 'args='], { encoding: 'utf8' })
+        .split('\n').filter((l) => l.includes(hangUrl.replace('rtsp://', '')) && l.includes('image2')).length
+      const socketsBefore = mock.hangSockets.length
+      const logStart = hb.log.length
+      const t0 = Date.now()
+      // Two Apple devices asking at the same time
+      const [a, b] = await Promise.all([hap.snapshot(cam.aid), sleep(300).then(() => hap.snapshot(cam.aid))])
+      const elapsed = Date.now() - t0
+      assert.notStrictEqual(a.status, 200)
+      assert.notStrictEqual(b.status, 200)
+      // Not after 8s as in 2.0.0-beta, and before HomeKit gives up (22s on Homebridge 1.x, 25s on 2.x)
+      assert.ok(elapsed >= 19000 && elapsed < 22000, `answered after ${elapsed}ms`)
+      const log = hb.log.slice(logStart)
+      assert.match(log, /Snapshot for 'Garage Camera' from the HD stream/)
+      assert.match(log, /Snapshot for 'Garage Camera' timed out after 20 seconds/)
+      assert.strictEqual(log.match(/timed out after 20 seconds/g).length, 1, 'one ffmpeg run for both requests')
+      assert.strictEqual(mock.hangSockets.length - socketsBefore, 1, 'one connection to the camera')
+      assert.doesNotMatch(log, /didn't respond at all|Snapshot process was killed/)
+      await waitFor(() => snapshotFfmpegs() === 0, { timeout: 5000, message: 'snapshot ffmpeg stopped' })
       hb.assertAlive()
     })
 

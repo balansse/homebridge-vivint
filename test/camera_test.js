@@ -18,7 +18,11 @@ function camera({ ffmpegPath, data, panelLogin } = {}) {
   Object.assign(cam, {
     log,
     config: {},
-    data: data || { Name: 'Front Doorbell', CameraInternalURL: ['rtsp://10.0.0.5:554/hd'], CameraExternalURL: ['rtsp://example.com/ext'] },
+    data: data || {
+      Name: 'Front Doorbell',
+      CameraInternalURL: ['rtsp://10.0.0.5:554/hd'], CameraInternalURLStandard: ['rtsp://10.0.0.5:554/sd'],
+      CameraExternalURL: ['rtsp://example.com/ext'], CameraExternalURLStandard: ['rtsp://example.com/ext-sd'],
+    },
     vivintApi: { panelLogin: panelLogin || { Name: 'panel', Password: 'p@ss:w/rd' } },
     ffmpegPath: ffmpegPath || 'ffmpeg',
   })
@@ -86,15 +90,132 @@ describe('Camera', function () {
     assert.strictEqual(res.image.toString(), 'JPEGDATA')
   })
 
-  it('kills a hung ffmpeg and answers with a timeout', async function () {
-    this.timeout(15000)
-    const fake = path.join(tmp, 'ffmpeg-hang.sh')
-    fs.writeFileSync(fake, '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 })
-    const t0 = Date.now()
-    const res = await snapshot(camera({ ffmpegPath: fake }))
-    assert.match(String(res.err), /timed out/)
-    assert.strictEqual(res.calls, 1)
-    assert.ok(Date.now() - t0 < 10000)
+  describe('snapshots (#205)', function () {
+    const alive = (pid) => { try { process.kill(pid, 0); return true } catch (_) { return false } }
+    const waitDead = async (pid) => { for (let i = 0; i < 100 && alive(pid); i++) await new Promise((r) => setTimeout(r, 20)); return !alive(pid) }
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+    // A fake ffmpeg that records its PID (and each run) before running `body`
+    const fakeFfmpeg = (name, body) => {
+      const file = path.join(tmp, name)
+      fs.writeFileSync(file, `#!/bin/sh\necho $$ > "$0.pid"\necho run >> "$0.runs"\n${body}\n`, { mode: 0o755 })
+      return { file, pid: () => Number(fs.readFileSync(`${file}.pid`, 'utf8')), runs: () => fs.readFileSync(`${file}.runs`, 'utf8').trim().split('\n').length }
+    }
+
+    it('waits 20 s by default, below the earliest point HAP-NodeJS gives up (22 s)', function () {
+      assert.strictEqual(Camera.SNAPSHOT_TIMEOUT_MS, 20000)
+      assert.strictEqual(camera().snapshotTimeoutMs, 20000)
+      assert.ok(camera().snapshotTimeoutMs + camera().snapshotKillGraceMs <= 22000)
+    })
+
+    it('returns the image of a slow camera instead of stopping it early', async function () {
+      const fake = fakeFfmpeg('ffmpeg-slow.sh', 'sleep 1\nprintf JPEGDATA')
+      const cam = camera({ ffmpegPath: fake.file })
+      cam.snapshotTimeoutMs = 3000
+      const res = await snapshot(cam)
+      assert.ifError(res.err)
+      assert.strictEqual(res.image.toString(), 'JPEGDATA')
+    })
+
+    it('answers a hung snapshot with a timeout at the deadline, then stops ffmpeg with SIGTERM', async function () {
+      const fake = fakeFfmpeg('ffmpeg-hang.sh', 'exec sleep 30')
+      const cam = camera({ ffmpegPath: fake.file })
+      cam.snapshotTimeoutMs = 400
+      cam.snapshotKillGraceMs = 5000
+      const t0 = Date.now()
+      const res = await snapshot(cam)
+      assert.match(String(res.err), /timed out/)
+      assert.strictEqual(res.calls, 1)
+      assert.ok(Date.now() - t0 < 1500, `answered after ${Date.now() - t0}ms`)
+      // `sleep` exits on SIGTERM, long before the SIGKILL grace period ends
+      assert.ok(await waitDead(fake.pid()), 'ffmpeg stopped by SIGTERM')
+      assert.ok(logLines.some((l) => /Snapshot for 'Front Doorbell' timed out after 0.4 seconds/.test(l)), logLines.join('\n'))
+      assert.ok(!logLines.some((l) => /killed with signal/.test(l)), 'our own stop is not reported as an error')
+    })
+
+    it('sends SIGKILL when ffmpeg ignores SIGTERM', async function () {
+      const fake = fakeFfmpeg('ffmpeg-stubborn.sh', "trap '' TERM\nexec sleep 30")
+      const cam = camera({ ffmpegPath: fake.file })
+      cam.snapshotTimeoutMs = 300
+      cam.snapshotKillGraceMs = 500
+      const res = await snapshot(cam)
+      assert.match(String(res.err), /timed out/)
+      await sleep(150)
+      assert.ok(alive(fake.pid()), 'still running during the grace period')
+      assert.ok(await waitDead(fake.pid()), 'killed after the grace period')
+      assert.strictEqual(cam.snapshotStoppers.size, 0)
+    })
+
+    it('runs one ffmpeg for requests that arrive while it runs, and a new one afterwards', async function () {
+      const fake = fakeFfmpeg('ffmpeg-shared.sh', 'sleep 0.5\nprintf JPEGDATA')
+      const cam = camera({ ffmpegPath: fake.file })
+      const results = await Promise.all([snapshot(cam), snapshot(cam), snapshot(cam)])
+      results.forEach((res) => {
+        assert.ifError(res.err)
+        assert.strictEqual(res.image.toString(), 'JPEGDATA')
+        assert.strictEqual(res.calls, 1)
+      })
+      assert.strictEqual(fake.runs(), 1, 'one ffmpeg run for three requests')
+      assert.ifError((await snapshot(cam)).err)
+      assert.strictEqual(fake.runs(), 2, 'a later request runs ffmpeg again')
+    })
+
+    it('shares a failure between waiting requests too', async function () {
+      const fake = fakeFfmpeg('ffmpeg-shared-fail.sh', 'sleep 0.3\nexit 1')
+      const cam = camera({ ffmpegPath: fake.file })
+      const results = await Promise.all([snapshot(cam), snapshot(cam)])
+      results.forEach((res) => {
+        assert.match(String(res.err), /exited with code 1/)
+        assert.strictEqual(res.calls, 1)
+      })
+      assert.strictEqual(fake.runs(), 1)
+    })
+
+    it('reads the SD stream by default, and the HD stream when configured or when there is no SD stream', async function () {
+      // Prints the input URL (4th argument) as the "image"
+      const fake = fakeFfmpeg('ffmpeg-url.sh', 'printf "%s" "$4"')
+      const url = async (cam) => (await snapshot(cam)).image.toString()
+      const cam = camera({ ffmpegPath: fake.file })
+      assert.strictEqual(await url(cam), 'rtsp://panel:p%40ss%3Aw%2Frd@10.0.0.5:554/sd')
+      assert.ok(logLines.some((l) => /Snapshot for 'Front Doorbell' from the SD stream/.test(l)))
+      cam.config = { snapshotStream: 'hd' }
+      assert.strictEqual(await url(cam), 'rtsp://panel:p%40ss%3Aw%2Frd@10.0.0.5:554/hd')
+      cam.config = { snapshotStream: 'bogus' }
+      assert.strictEqual(await url(cam), 'rtsp://panel:p%40ss%3Aw%2Frd@10.0.0.5:554/sd', 'unknown value: default')
+      cam.config = { useExternalVideoStreams: true }
+      assert.strictEqual(await url(cam), 'rtsp://panel:p%40ss%3Aw%2Frd@example.com/ext-sd')
+      cam.config = { useExternalVideoStreams: true, snapshotStream: 'hd' }
+      assert.strictEqual(await url(cam), 'rtsp://panel:p%40ss%3Aw%2Frd@example.com/ext')
+
+      const hdOnly = camera({ ffmpegPath: fake.file, data: { Name: 'Garage', CameraInternalURL: ['rtsp://10.0.0.6/hd'], CameraInternalURLStandard: [] } })
+      assert.strictEqual(await url(hdOnly), 'rtsp://panel:p%40ss%3Aw%2Frd@10.0.0.6/hd')
+      assert.ok(logLines.some((l) => /Snapshot for 'Garage' from the HD stream/.test(l)))
+    })
+
+    it('stops a running snapshot on destroy() (Homebridge shutdown)', async function () {
+      const fake = fakeFfmpeg('ffmpeg-destroy.sh', "trap '' TERM\nexec sleep 30")
+      const cam = camera({ ffmpegPath: fake.file })
+      const pending = snapshot(cam)
+      await sleep(200)
+      const t0 = Date.now()
+      cam.destroy()
+      const res = await pending
+      assert.match(String(res.err), /stopped/)
+      assert.strictEqual(res.calls, 1)
+      assert.ok(Date.now() - t0 < 500)
+      assert.ok(await waitDead(fake.pid()), 'ffmpeg killed right away')
+      assert.strictEqual(cam.snapshotStoppers.size, 0)
+    })
+
+    it('destroy() also stops an ffmpeg that is still exiting after its deadline', async function () {
+      const fake = fakeFfmpeg('ffmpeg-destroy-grace.sh', "trap '' TERM\nexec sleep 30")
+      const cam = camera({ ffmpegPath: fake.file })
+      cam.snapshotTimeoutMs = 200
+      cam.snapshotKillGraceMs = 10000
+      assert.match(String((await snapshot(cam)).err), /timed out/)
+      assert.ok(alive(fake.pid()), 'in the grace period')
+      cam.destroy()
+      assert.ok(await waitDead(fake.pid()), 'killed by destroy()')
+    })
   })
 
   describe('.isDoorbell (#12, #32)', function () {
