@@ -487,9 +487,38 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
     it('answers a snapshot request when the stream is unreachable, without crashing', async function () {
       const accs = await hap.accessories()
       const cam = accs.find((a) => a.name === 'Front Doorbell')
+      const logStart = hb.log.length
       const res = await hap.snapshot(cam.aid)
       assert.notStrictEqual(res.status, 200, 'no image expected from an unreachable stream')
+      // Snapshots come from the SD stream when the camera has one (#205)
+      await waitFor(() => /Snapshot for 'Front Doorbell' from the SD stream/.test(hb.log.slice(logStart)), { timeout: 5000, message: 'SD stream log line' })
       await sleep(500)
+      hb.assertAlive()
+    })
+
+    it('answers snapshots of a hanging camera at 20s with one ffmpeg, then stops it (#205)', async function () {
+      // Garage Camera has only an HD stream, pointing at a server that accepts the connection and never answers
+      const cam = (await hap.accessories()).find((a) => a.name === 'Garage Camera')
+      const hangUrl = mock.deviceOverrides[71].ciu[0]
+      const snapshotFfmpegs = () => cp.execFileSync('ps', ['-A', '-o', 'args='], { encoding: 'utf8' })
+        .split('\n').filter((l) => l.includes(hangUrl.replace('rtsp://', '')) && l.includes('image2')).length
+      const socketsBefore = mock.hangSockets.length
+      const logStart = hb.log.length
+      const t0 = Date.now()
+      // Two Apple devices asking at the same time
+      const [a, b] = await Promise.all([hap.snapshot(cam.aid), sleep(300).then(() => hap.snapshot(cam.aid))])
+      const elapsed = Date.now() - t0
+      assert.notStrictEqual(a.status, 200)
+      assert.notStrictEqual(b.status, 200)
+      // Not after 8s as in 2.0.0-beta, and before HomeKit gives up (22s on Homebridge 1.x, 25s on 2.x)
+      assert.ok(elapsed >= 19000 && elapsed < 22000, `answered after ${elapsed}ms`)
+      const log = hb.log.slice(logStart)
+      assert.match(log, /Snapshot for 'Garage Camera' from the HD stream/)
+      assert.match(log, /Snapshot for 'Garage Camera' timed out after 20 seconds/)
+      assert.strictEqual(log.match(/timed out after 20 seconds/g).length, 1, 'one ffmpeg run for both requests')
+      assert.strictEqual(mock.hangSockets.length - socketsBefore, 1, 'one connection to the camera')
+      assert.doesNotMatch(log, /didn't respond at all|Snapshot process was killed/)
+      await waitFor(() => snapshotFfmpegs() === 0, { timeout: 5000, message: 'snapshot ffmpeg stopped' })
       hb.assertAlive()
     })
 
@@ -720,6 +749,66 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       hb2.assertAlive()
       assert.strictEqual(mock.vivintRequests((r) => r.path === '/api/authuser').length - authBefore, 1, 'no login retries on 401')
       assert.ok(!hb2.log.includes('EXPIRED_TOKEN'), 'token not logged')
+      assert.doesNotMatch(hb2.log, /Retrying in/, 'an invalid token is final (#204)')
+    })
+
+    // A Vivint error while starting used to leave every accessory at "No Response" until a restart (#204)
+    const failSystemFetch = (times) => mock.override((r) => r.path === `/api/systems/${PANEL_ID}`, { status: 500, body: { msg: 'mock failure' }, times })
+    const RETRY_LINE = /Could not connect to Vivint \(GET \/api\/systems\/13 failed: HTTP 500\)\. Retrying in 1 minute\./
+
+    it('shuts down promptly while waiting to retry a failed start (#204)', async function () {
+      await hb2.stop()
+      failSystemFetch(1)
+      hb2 = new HomebridgeProcess({
+        storage: hb.storage, hapPort: hb.hapPort, mockPort, certPath: certs.cert,
+        platformConfig: { motionDetectedOccupancySensorMins: 1, lowBatteryLevel: 15 },
+      })
+      hb2.start()
+      await waitFor(() => RETRY_LINE.test(hb2.log), { timeout: 60000, message: 'retry message' })
+      assert.doesNotMatch(hb2.log, /Error while bootstrapping accessories/)
+      // The pending retry timer must not keep Homebridge alive (Homebridge 2.x exits once the event loop is empty)
+      hb2.assertAlive()
+      const t0 = Date.now()
+      assert.ok(await hb2.stop(), 'exited')
+      const hbMajor = Number(require(path.join(HB_PROJECT, 'node_modules', 'homebridge', 'package.json')).version.split('.')[0])
+      const limit = hbMajor >= 2 ? 3000 : 6500
+      assert.ok(Date.now() - t0 < limit, `shutdown took ${Date.now() - t0}ms (limit ${limit}ms on Homebridge ${hbMajor}.x)`)
+      assert.ok(!FATAL_PATTERNS.some((p) => p.test(hb2.log)), hb2.tail(80))
+    })
+
+    it('retries a failed start and recovers without a restart (#204)', async function () {
+      failSystemFetch(1)
+      hb2 = new HomebridgeProcess({
+        storage: hb.storage, hapPort: hb.hapPort, mockPort, certPath: certs.cert,
+        platformConfig: { motionDetectedOccupancySensorMins: 1, lowBatteryLevel: 15 },
+      })
+      hb2.start()
+      await waitFor(() => RETRY_LINE.test(hb2.log), { timeout: 60000, message: 'retry message' })
+      const systemFetches = () => mock.vivintRequests((r) => r.path === `/api/systems/${PANEL_ID}`).length
+      const fetchesBefore = systemFetches()
+
+      // While waiting, cached accessories report errors instead of stale values
+      const lock = await waitFor(() => hap.find('Front Door', T.LockMechanism, T.LockCurrentState), { message: 'cached lock' })
+      const failing = await hap.get(lock)
+      assert.notStrictEqual(failing.status, undefined, `expected an error status, got ${JSON.stringify(failing)}`)
+
+      await waitFor(() => /Connected to Vivint after 2 attempts/.test(hb2.log), { timeout: 75000, message: 'second attempt' })
+      assert.strictEqual(systemFetches() - fetchesBefore, 1, 'one more system fetch')
+      // (No "Removing 0" check: an earlier test leaves a re-classified accessory in the cache)
+      await waitFor(() => /Adding \d+ accessories/.test(hb2.log), { timeout: 10000, message: 'bootstrap after retry' })
+
+      // The accessories answer again (the error handler is gone) and real-time updates arrive
+      const ok = await waitFor(async () => {
+        const res = await hap.get(lock)
+        return res.status === undefined && res
+      }, { message: 'lock answers after the retry' })
+      assert.strictEqual(ok.value, 1, 'secured')
+      await waitFor(() => mock.pendingSubscribes.length > 0, { message: 'PubNub subscribe after retry' })
+      const contact = await hap.find('Basement Window', T.ContactSensor, T.ContactSensorState)
+      mock.pushPubNub({ _id: `${PANEL_ID}|${PARTITION_ID}`, t: 'account_partition', da: { plctx: { ts: '2026-11-24T16:00:00.000000' }, d: [{ _id: 42, s: true }] } })
+      await waitFor(async () => (await hap.get(contact)).value === 1, { message: 'contact update after retry' })
+      hb2.assertAlive()
+      assert.ok(!FATAL_PATTERNS.some((p) => p.test(hb2.log)), hb2.tail(80))
     })
 
     // Accessory cache written by Homebridge; strip `panelId` to simulate a cache from a version before 2.0.0-beta.1
