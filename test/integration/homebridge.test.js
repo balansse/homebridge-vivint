@@ -12,7 +12,7 @@ const os = require('os')
 const path = require('path')
 
 const { MockVivint, SENTINELS, PANEL_ID, PARTITION_ID, SECOND_PANEL_ID, SECOND_PARTITION_ID, SNAPSHOT_TS } = require('./mock-vivint')
-const { HapClient, T } = require('./hap-client')
+const { HapClient, T, tlv, tlvDecode, u8, u16, u32, f32 } = require('./hap-client')
 
 const HB_PROJECT = process.env.HB_PROJECT
 const PIN = '031-45-154'
@@ -474,6 +474,65 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       const res = await hap.snapshot(cam.aid)
       assert.notStrictEqual(res.status, 200, 'no image expected from an unreachable stream')
       await sleep(500)
+      hb.assertAlive()
+    })
+
+    it('answers a live-stream start with an error when the camera is unreachable, and frees the stream slot (#134)', async function () {
+      // Drives HomeKit's stream setup over HAP: SetupEndpoints, then SelectedRTPStreamConfiguration START.
+      // The mock camera URL (rtsp://127.0.0.1:9) refuses connections, so real ffmpeg exits before sending video.
+      const accs = await hap.accessories()
+      const cam = accs.find((a) => a.name === 'Front Doorbell')
+      const rtp = cam.services.find((s) => s.type === T.CameraRTPStreamManagement)
+      const iid = (type) => rtp.characteristics.find((c) => c.type === type).iid
+      const ref = (type) => ({ aid: cam.aid, iid: iid(type) })
+
+      const crypto = require('crypto')
+      const sessionId = crypto.randomBytes(16)
+      const srtp = () => tlv(1, u8(0), 2, crypto.randomBytes(16), 3, crypto.randomBytes(14))
+      const setupEndpoints = tlv(
+        1, sessionId,
+        3, tlv(1, u8(0), 2, '127.0.0.1', 3, u16(55000), 4, u16(55002)),
+        4, srtp(),
+        5, srtp(),
+      ).toString('base64')
+      const setupStatus = async () => tlvDecode(Buffer.from((await hap.get(ref(T.SetupEndpoints))).value, 'base64'))[2][0]
+
+      assert.strictEqual((await hap.set(ref(T.SetupEndpoints), setupEndpoints)).status, 0)
+      assert.strictEqual(await setupStatus(), 0, 'SetupEndpoints SUCCESS')
+
+      const start = tlv(
+        1, tlv(1, sessionId, 2, u8(1)), // session control: START
+        2, tlv( // selected video: H.264 baseline 3.1, 640x360@30
+          1, u8(0),
+          2, tlv(1, u8(0), 2, u8(0), 3, u8(0)),
+          3, tlv(1, u16(640), 2, u16(360), 3, u8(30)),
+          4, tlv(1, u8(99), 2, u32(1234), 3, u16(299), 4, f32(0.5), 5, u16(1378)),
+        ),
+        3, tlv( // selected audio: Opus 16 kHz mono
+          1, u8(3),
+          2, tlv(1, u8(1), 2, u8(0), 3, u8(1), 4, u8(20)),
+          3, tlv(1, u8(110), 2, u32(5678), 3, u16(24), 4, f32(5), 6, u8(13)),
+          4, u8(0),
+        ),
+      ).toString('base64')
+      const logStart = hb.log.length
+      const t0 = Date.now()
+      const res = await hap.set(ref(T.SelectedRTPStreamConfiguration), start)
+      assert.notStrictEqual(res.status, 0, `expected the START to fail, got ${JSON.stringify(res)}`)
+      assert.ok(Date.now() - t0 < 20000, 'answered before the first-frame timeout expired')
+      const log = hb.log.slice(logStart)
+      assert.match(log, /\[Front Doorbell\] Starting stream for session \S+ \(video: copy, RTSP over tcp\)/)
+      assert.match(log, /Stream for session \S+ failed: ffmpeg exited with code \d+ before sending video/)
+      assert.ok(log.includes('-codec:v copy'), 'copy pipeline used by default')
+
+      // The slot is free again: a new setup is not answered BUSY
+      const again = tlv(1, crypto.randomBytes(16), 3, tlv(1, u8(0), 2, '127.0.0.1', 3, u16(55004), 4, u16(55006)), 4, srtp(), 5, srtp())
+      assert.strictEqual((await hap.set(ref(T.SetupEndpoints), again.toString('base64'))).status, 0)
+      assert.strictEqual(await setupStatus(), 0, 'SetupEndpoints SUCCESS again (not BUSY)')
+
+      // No streaming ffmpeg left behind
+      const ps = cp.execFileSync('ps', ['-A', '-o', 'args='], { encoding: 'utf8' })
+      assert.ok(!ps.split('\n').some((l) => l.includes('srtp://127.0.0.1:55000')), 'no leftover stream ffmpeg')
       hb.assertAlive()
     })
   })

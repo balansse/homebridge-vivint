@@ -16,8 +16,44 @@ const T = {
   HeatingThresholdTemperature: '12', CoolingThresholdTemperature: '0D', TemperatureDisplayUnits: '36',
   Fan: '40', Lightbulb: '43', Switch: '49', On: '25', Brightness: '8',
   Battery: '96', BatteryLevel: '68', StatusLowBattery: '79',
-  CameraRTPStreamManagement: '110',
+  CameraRTPStreamManagement: '110', SetupEndpoints: '118', SelectedRTPStreamConfiguration: '117', StreamingStatus: '120',
 }
+
+/** Minimal TLV8 (HAP) encoder: tlv(type, value, type, value, ...); values are Buffers, strings or nested tlv() output. */
+function tlv(...pairs) {
+  const parts = []
+  for (let i = 0; i < pairs.length; i += 2) {
+    const type = pairs[i]
+    let value = pairs[i + 1]
+    if (!Buffer.isBuffer(value)) value = Buffer.from(String(value))
+    let offset = 0
+    do {
+      const chunk = value.subarray(offset, offset + 255)
+      parts.push(Buffer.from([type, chunk.length]), chunk)
+      offset += 255
+    } while (offset < value.length)
+  }
+  return Buffer.concat(parts)
+}
+
+/** TLV8 decoder (single level) -> { [type]: Buffer } */
+function tlvDecode(buffer) {
+  const out = {}
+  let i = 0
+  while (i + 2 <= buffer.length) {
+    const type = buffer[i]
+    const len = buffer[i + 1]
+    const value = buffer.subarray(i + 2, i + 2 + len)
+    out[type] = out[type] ? Buffer.concat([out[type], value]) : value
+    i += 2 + len
+  }
+  return out
+}
+
+const u8 = (n) => Buffer.from([n])
+const u16 = (n) => { const b = Buffer.alloc(2); b.writeUInt16LE(n); return b }
+const u32 = (n) => { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b }
+const f32 = (n) => { const b = Buffer.alloc(4); b.writeFloatLE(n); return b }
 
 const shortType = (type) => {
   const m = /^0*([0-9A-F]+)-0000-1000-8000-0026BB765291$/i.exec(type)
@@ -102,4 +138,4 @@ class HapClient {
   }
 }
 
-module.exports = { HapClient, T }
+module.exports = { HapClient, T, tlv, tlvDecode, u8, u16, u32, f32 }
