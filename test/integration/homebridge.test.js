@@ -786,9 +786,11 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
         return { aid: acc.aid, types: acc.services.map((s) => s.type) }
       }
 
+      // Lines logged right after "Adding N accessories" can arrive in a later stdout chunk: wait for them
+      const waitForLog = (re, message) => waitFor(() => re.test(hb2.log), { timeout: 10000, message })
       await startHb2({ doorbellCameraIds: ['Garage Camera'] })
-      assert.match(hb2.log, /Camera \[Garage Camera\] \[ID\]:71 is set up as a doorbell/)
-      assert.match(hb2.log, /Camera \[Front Doorbell\] \[ID\]:70 is set up as a doorbell/)
+      await waitForLog(/Camera \[Garage Camera\] \[ID\]:71 is set up as a doorbell/, 'Garage Camera set up as a doorbell')
+      await waitForLog(/Camera \[Front Doorbell\] \[ID\]:70 is set up as a doorbell/, 'Front Doorbell set up as a doorbell')
       const asDoorbell = await waitFor(async () => {
         const s = await services('Garage Camera')
         return s.types.includes(T.Doorbell) && s
@@ -807,7 +809,8 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       await startHb2({})
       assert.match(hb2.log, /Removing 0 accessories/)
       assert.match(hb2.log, /Adding 0 accessories/)
-      assert.match(hb2.log, /Camera \[Garage Camera\] \[ID\]:71 is set up as a camera\. If it is a doorbell, add its name or ID to "doorbellCameraIds"/)
+      await waitForLog(/Camera \[Garage Camera\] \[ID\]:71 is set up as a camera\. If it is a doorbell, add its name or ID to "doorbellCameraIds"/,
+        'Garage Camera set up as a camera')
       const asCamera = await waitFor(async () => {
         const s = await services('Garage Camera')
         return !s.types.includes(T.Doorbell) && s
