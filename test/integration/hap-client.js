@@ -61,16 +61,18 @@ const shortType = (type) => {
 }
 
 class HapClient {
-  constructor(port, pin) {
+  /** @param {object} [options] `agent`: e.g. a keep-alive agent, to keep one HAP connection like a real controller */
+  constructor(port, pin, { agent } = {}) {
     this.port = port
     this.pin = pin
+    this.agent = agent
   }
 
   request(method, path, body) {
     return new Promise((resolve, reject) => {
       const data = body ? Buffer.from(JSON.stringify(body)) : undefined
       const req = http.request({
-        host: '127.0.0.1', port: this.port, method, path,
+        host: '127.0.0.1', port: this.port, method, path, agent: this.agent,
         headers: {
           authorization: this.pin,
           ...(data ? { 'content-type': 'application/hap+json', 'content-length': data.length } : {}),

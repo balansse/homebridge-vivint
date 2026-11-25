@@ -159,10 +159,15 @@ describe('Camera', function () {
         })
       }
 
-      it('omits audio when HomeKit did not request it', function () {
-        const args = Camera.buildStreamArgs({ rtspUrl: 'rtsp://x', request: request(false), session: session() })
-        assert.ok(!args.includes('libfdk_aac'))
-        assert.ok(!args.some((a) => String(a).includes(':50004')))
+      it('omits audio when the camera has none or HomeKit did not request it', function () {
+        // ffmpeg 8 refuses to start when an audio output is requested from a stream without audio
+        for (const args of [
+          Camera.buildStreamArgs({ rtspUrl: 'rtsp://x', request: request(), session: session(), withAudio: false }),
+          Camera.buildStreamArgs({ rtspUrl: 'rtsp://x', request: request(false), session: session() }),
+        ]) {
+          assert.ok(!args.includes('libfdk_aac'))
+          assert.ok(!args.some((a) => String(a).includes(':50004')))
+        }
       })
     })
 
@@ -220,7 +225,7 @@ describe('Camera', function () {
         assert.strictEqual(argAfter(args, '-rtsp_transport'), 'tcp')
         const pid = cam.ongoingSessions.S1.process.pid
         assert.ok(alive(pid))
-        assert.ok(logLines.some((l) => /Starting stream for session S1 \(video: copy, RTSP over tcp\)/.test(l)), logLines.join('\n'))
+        assert.ok(logLines.some((l) => /Starting stream for session S1 \(video: copy, audio: no, RTSP over tcp\)/.test(l)), logLines.join('\n'))
 
         await stop(cam)
         assert.ok(await waitDead(pid), 'ffmpeg killed on STOP')
@@ -236,6 +241,44 @@ describe('Camera', function () {
         assert.strictEqual(argAfter(args, '-codec:v'), 'libx264')
         assert.strictEqual(argAfter(args, '-rtsp_transport'), 'udp')
         await stop(cam)
+      })
+
+      it('adds audio only for cameras that report an audio stream', async function () {
+        const cam = streamingCamera(fake('ffmpeg-stream-audio.sh', STREAMS))
+        cam.data.CameraInternalAudioURL = ['rtsp://10.0.0.5:554/audio']
+        assert.ifError((await start(cam)).err)
+        assert.strictEqual(argAfter(readArgs(), '-codec:a'), 'libfdk_aac')
+        assert.ok(logLines.some((l) => /\(video: copy, audio: yes, RTSP over tcp\)/.test(l)))
+        await stop(cam)
+      })
+
+      it('answers HomeKit after the grace period when the camera is slow, then stops the stream if no video ever arrives', async function () {
+        const cam = streamingCamera(fake('ffmpeg-slow.sh', SILENT))
+        cam.startGraceMs = 200
+        cam.firstFrameTimeoutMs = 700
+        const t0 = Date.now()
+        const res = await start(cam)
+        assert.ifError(res.err)
+        const answeredAfter = Date.now() - t0
+        assert.ok(answeredAfter >= 200 && answeredAfter < 600, `answered after ${answeredAfter}ms`)
+        const pid = cam.ongoingSessions.S1.process.pid
+        for (let i = 0; i < 50 && cam.forceStopped.length === 0; i++) await new Promise((r) => setTimeout(r, 20))
+        assert.deepStrictEqual(cam.forceStopped, ['S1'], 'HomeKit stream slot released')
+        assert.ok(await waitDead(pid), 'ffmpeg killed')
+        assert.deepStrictEqual(cam.ongoingSessions, {})
+        assert.strictEqual(res.calls(), 1, 'START answered once')
+      })
+
+      it('answers a START still waiting for video when HomeKit stops the session', async function () {
+        const cam = streamingCamera(fake('ffmpeg-slow2.sh', SILENT))
+        const pending = start(cam)
+        await new Promise((r) => setTimeout(r, 100))
+        const pid = cam.ongoingSessions.S1.process.pid
+        await stop(cam)
+        const res = await pending
+        assert.match(String(res.err), /Stream stopped/)
+        assert.strictEqual(res.calls(), 1)
+        assert.ok(await waitDead(pid))
       })
 
       it('falls back to copy/tcp for unknown config values', function () {
