@@ -131,7 +131,7 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
     const hapPort = await freePort()
     hb = new HomebridgeProcess({
       storage, hapPort, mockPort, certPath: certs.cert,
-      platformConfig: { motionDetectedOccupancySensorMins: 1, lowBatteryLevel: 15 },
+      platformConfig: { motionDetectedOccupancySensorMins: 1, lowBatteryLevel: 15, cameraMotionFromDeter: true },
     })
     hb.start()
     hap = new HapClient(hapPort, PIN)
@@ -452,6 +452,22 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       const lines = hb.log.slice(logStart).split('\n')
       assert.strictEqual(lines.filter((l) => /PubNub connection lost/.test(l)).length, 1, 'one warning per outage')
       assert.strictEqual(lines.filter((l) => /PubNub connection restored/.test(l)).length, 1, 'one recovery line')
+      hb.assertAlive()
+    })
+
+    it('counts camera motion messages of the enabled kinds only (#206)', async function () {
+      // This instance runs with cameraMotionFromDeter on and cameraMotionFromStatus off. HomeKit gets the motion
+      // as an event, which this HTTP client does not subscribe to, so the log lines are checked instead.
+      const logStart = hb.log.length
+      const push = (ts, device) => mock.pushPubNub({ _id: `${PANEL_ID}|${PARTITION_ID}`, t: 'account_partition', da: { plctx: { ts }, d: [device] } })
+      push('2026-11-24T12:30:00.000000', { _id: 70, deter_on_duty: true, t: 'camera_device' })
+      await waitFor(() => /\[Front Doorbell\] Motion from a Smart Deter message/.test(hb.log.slice(logStart)), { timeout: 5000, message: 'deter motion' })
+      push('2026-11-24T12:30:01.000000', { _id: 70, act: 'camera_device', s: 1 })
+      await waitFor(() => /Camera \[Front Doorbell\] sent a camera status message \(act\/s\)\. .*"cameraMotionFromStatus"/.test(hb.log.slice(logStart)),
+        { timeout: 5000, message: 'status message hint' })
+      assert.strictEqual(hb.log.slice(logStart).match(/Motion from a/g).length, 1, 'the status message is not motion')
+      // Let the camera's 5s motion reset run before the next test
+      await sleep(5500)
       hb.assertAlive()
     })
 

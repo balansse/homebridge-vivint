@@ -218,6 +218,100 @@ describe('Camera', function () {
     })
   })
 
+  describe('camera motion messages (#206)', function () {
+    const VivintApiModule = require('../lib/vivint_api.js')
+    const VivintApi = VivintApiModule({}, log)
+    // The real PubNub field mapping, as applied to every incoming message
+    const parse = (raw) => VivintApi.prototype.parsePubNub.call(null, raw)
+
+    // A camera with a stub motion service that records MotionDetected updates
+    const motionCamera = (config = {}) => {
+      const cam = camera()
+      cam.config = config
+      cam.id = 70
+      cam.data = { Id: 70, Name: 'Front Doorbell', DeterOnDuty: false }
+      cam.Characteristic = { MotionDetected: 'MotionDetected' }
+      cam.motionUpdates = []
+      cam.motionService = { updateCharacteristic: (c, v) => { if (c === 'MotionDetected') cam.motionUpdates.push(v) } }
+      return cam
+    }
+    const DETER = { _id: 70, deter_on_duty: true, t: 'camera_device' }
+    const STATUS = { _id: 70, act: 'camera_device', s: 1 }
+
+    // Motion is reset after 5s; keep those timers from holding up the test run
+    let realSetTimeout
+    beforeEach(() => {
+      realSetTimeout = global.setTimeout
+      global.setTimeout = (fn, ms, ...args) => (ms === 5000 ? { unref() {} } : realSetTimeout(fn, ms, ...args))
+    })
+    afterEach(() => { global.setTimeout = realSetTimeout })
+
+    it('recognises the deter and status messages by their exact fields, after the real PubNub mapping', function () {
+      assert.deepStrictEqual(parse(DETER), { Id: 70, DeterOnDuty: true, Type: 'camera_device' })
+      assert.deepStrictEqual(parse(STATUS), { Id: 70, ActualType: 'camera_device', Status: 1 })
+      assert.strictEqual(Camera.motionMessageKind(parse(DETER)), 'deter')
+      assert.strictEqual(Camera.motionMessageKind(parse(STATUS)), 'status')
+      assert.strictEqual(Camera.motionMessageKind(parse({ ...STATUS, s: 0 })), 'status', 'any status value, as in vivintpy')
+      assert.strictEqual(Camera.motionMessageKind(parse({ ...DETER, deter_on_duty: 1 })), 'deter', 'numeric values, like locks sending 0/1 (#121)')
+      assert.strictEqual(Camera.motionMessageKind(parse({ ...DETER, deter_on_duty: false })), null, 'Smart Deter turning off')
+      assert.strictEqual(Camera.motionMessageKind(parse({ ...DETER, deter_on_duty: 0 })), null)
+      assert.strictEqual(Camera.motionMessageKind(parse({ ...DETER, piv: true })), null, 'extra fields')
+      assert.strictEqual(Camera.motionMessageKind(parse({ _id: 70, deter_on_duty: true })), null, 'missing fields')
+      assert.strictEqual(Camera.motionMessageKind(parse({ _id: 70, s: 1 })), null)
+      assert.strictEqual(Camera.motionMessageKind(undefined), null)
+    })
+
+    it('ignores them by default, as before, and logs a hint once per kind', function () {
+      const cam = motionCamera()
+      cam.handlePatch(parse(DETER))
+      cam.handlePatch(parse(DETER))
+      cam.handlePatch(parse(STATUS))
+      assert.deepStrictEqual(cam.motionUpdates, [])
+      const hints = logLines.filter((l) => /Camera \[Front Doorbell\] sent a .* Some cameras report motion only this way/.test(l))
+      assert.strictEqual(hints.length, 2, hints.join('\n'))
+      assert.match(hints[0], /Smart Deter message \(deter_on_duty\).*"cameraMotionFromDeter"/)
+      assert.match(hints[1], /camera status message \(act\/s\).*"cameraMotionFromStatus"/)
+    })
+
+    it('still reports PersonInView / VisitorDetected motion', function () {
+      const cam = motionCamera()
+      cam.handlePatch(parse({ _id: 70, piv: true }))
+      cam.handlePatch(parse({ _id: 70, vdt: true }))
+      assert.deepStrictEqual(cam.motionUpdates, [true, true])
+    })
+
+    it('counts deter messages as motion with cameraMotionFromDeter', function () {
+      const cam = motionCamera({ cameraMotionFromDeter: true })
+      cam.handlePatch(parse(DETER))
+      assert.deepStrictEqual(cam.motionUpdates, [true])
+      cam.handlePatch(parse(STATUS))
+      assert.deepStrictEqual(cam.motionUpdates, [true], 'status messages need their own setting')
+      assert.ok(logLines.some((l) => /\[Front Doorbell\] Motion from a Smart Deter message/.test(l)))
+    })
+
+    it('counts status messages as motion with cameraMotionFromStatus', function () {
+      const cam = motionCamera({ cameraMotionFromStatus: true })
+      cam.handlePatch(parse(STATUS))
+      cam.handlePatch(parse(DETER))
+      assert.deepStrictEqual(cam.motionUpdates, [true])
+    })
+
+    it('never counts fields kept from earlier messages or snapshots, or HomeKit reads', function () {
+      const cam = motionCamera({ cameraMotionFromDeter: true, cameraMotionFromStatus: true })
+      cam.handlePatch(parse(DETER))
+      assert.deepStrictEqual(cam.motionUpdates, [true])
+      assert.strictEqual(cam.data.DeterOnDuty, true, 'the field stays in the device data')
+      // The minute-by-minute snapshot carries the same fields
+      cam.handleSnapshot({ Id: 70, Name: 'Front Doorbell', DeterOnDuty: true, ActualType: 'camera_device', Status: 1 })
+      // Another, unrelated patch
+      cam.handlePatch(parse({ _id: 70, n: 'Front Doorbell' }))
+      assert.deepStrictEqual(cam.motionUpdates, [true])
+      // HomeKit reading MotionDetected
+      assert.strictEqual(cam.getMotionDetectedState(), false)
+      assert.strictEqual(cam.patchMotionKind, null)
+    })
+  })
+
   describe('.isDoorbell (#12, #32)', function () {
     const cam = (names, id = 70) => ({ id, names })
     it('detects doorbells by name, as before', function () {

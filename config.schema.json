@@ -77,6 +77,16 @@
             "type": "string"
           }
         },
+        "cameraMotionFromDeter": {
+          "title": "Camera motion from Smart Deter messages",
+          "description": "Some cameras never report a person in view and send a Smart Deter message instead. Turn this on if a camera never shows motion in HomeKit; the log suggests it when such a message arrives. Unconfirmed: these messages might also be sent when Smart Deter switches on by schedule, which would show as motion.",
+          "type": "boolean"
+        },
+        "cameraMotionFromStatus": {
+          "title": "Camera motion from camera status messages",
+          "description": "Some cameras report motion as a short status message. Turn this on if a camera never shows motion in HomeKit; the log suggests it when such a message arrives. These messages are also sent when a detection ends, so you may get extra motion notifications.",
+          "type": "boolean"
+        },
         "videoProcessing": {
           "title": "Camera live view video",
           "description": "'Pass through' sends the camera's video to HomeKit unchanged (the 1.10 behaviour; light on CPU). 'Transcode' re-encodes it at the size HomeKit asks for (1.11 - 1.12 behaviour; CPU-heavy, may be needed for viewing away from home / over cellular).",
