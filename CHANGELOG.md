@@ -1,3 +1,7 @@
+## Unreleased
+### Changes
+- The `showCameraConfig` setting's description now warns that its log output includes each camera's RTSP URL with the panel login and password.
+
 ## 2.0.0-beta.1 (2026-11-25)
 ### Changes
 - Cameras that report motion only as Smart Deter messages or short camera status messages (never "person in view") can now trigger HomeKit motion: turn on the new `cameraMotionFromDeter` or `cameraMotionFromStatus` setting. Both are off by default, so existing setups behave as before; the log suggests the setting the first time such a message arrives (#206).
@@ -31,7 +35,7 @@
 - Timers and the PubNub connection are cleaned up when Homebridge shuts down.
 
 ### Security
-- Refresh tokens, session cookies, panel credentials, MFA codes and passwords are no longer written to the Homebridge log.
+- Refresh tokens, session cookies, panel credentials, MFA codes and passwords are no longer written to the Homebridge log. The exception is the opt-in `showCameraConfig` setting, which prints each camera's RTSP URL with the panel login on purpose (as in 1.x).
 - The MFA CLI (`npm run mfa`) hides the password while typing and no longer prints raw API responses.
 
 ### Maintenance

@@ -119,7 +119,7 @@
         },
         "showCameraConfig": {
           "title": "Show camera config",
-          "description": "Shows configuration for all detected cameras in the log",
+          "description": "Prints a homebridge-camera-ffmpeg configuration for every camera in the log. It includes each camera's RTSP URL with the panel login and password, so treat that log output like a password and turn this off again after copying what you need.",
           "type": "boolean"
         }
       }
