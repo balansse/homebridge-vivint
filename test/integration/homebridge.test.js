@@ -778,5 +778,46 @@ const FATAL_PATTERNS = [/Unhandled( promise)? rejection/i, /uncaughtException/i,
       hb2.assertAlive()
       assert.ok(!/Error while bootstrapping accessories/.test(hb2.log))
     })
+
+    it('sets up a camera listed in doorbellCameraIds as a doorbell, and back, without re-creating it (#12, #32)', async function () {
+      await hb2.stop()
+      const services = async (name) => {
+        const acc = (await hap.accessories()).find((a) => a.name === name)
+        return { aid: acc.aid, types: acc.services.map((s) => s.type) }
+      }
+
+      await startHb2({ doorbellCameraIds: ['Garage Camera'] })
+      assert.match(hb2.log, /Camera \[Garage Camera\] \[ID\]:71 is set up as a doorbell/)
+      assert.match(hb2.log, /Camera \[Front Doorbell\] \[ID\]:70 is set up as a doorbell/)
+      const asDoorbell = await waitFor(async () => {
+        const s = await services('Garage Camera')
+        return s.types.includes(T.Doorbell) && s
+      }, { message: 'Garage Camera with a Doorbell service' })
+      assert.ok(asDoorbell.types.includes(T.ContactSensor), 'doorbell button sensor')
+
+      // A ring (DingDong) rings the HomeKit doorbell. HomeKit receives the ring and the button pulse as events,
+      // which this HTTP client does not subscribe to, so the log line is checked instead.
+      await waitFor(() => mock.pendingSubscribes.length > 0, { message: 'PubNub subscribe' })
+      const logStart = hb2.log.length
+      mock.pushPubNub({ _id: `${PANEL_ID}|${PARTITION_ID}`, t: 'account_partition', da: { plctx: { ts: '2026-11-24T15:00:00.000000' }, d: [{ _id: 71, dng: true }] } })
+      await waitFor(() => /\[Garage Camera\] Doorbell rang/.test(hb2.log.slice(logStart)), { timeout: 5000, message: 'doorbell ring' })
+
+      // Removed from the list: back to a plain camera, same accessory (no re-registration)
+      await hb2.stop()
+      await startHb2({})
+      assert.match(hb2.log, /Removing 0 accessories/)
+      assert.match(hb2.log, /Adding 0 accessories/)
+      assert.match(hb2.log, /Camera \[Garage Camera\] \[ID\]:71 is set up as a camera\. If it is a doorbell, add its name or ID to "doorbellCameraIds"/)
+      const asCamera = await waitFor(async () => {
+        const s = await services('Garage Camera')
+        return !s.types.includes(T.Doorbell) && s
+      }, { message: 'Garage Camera without a Doorbell service' })
+      assert.strictEqual(asCamera.aid, asDoorbell.aid, 'same accessory')
+      assert.ok(!asCamera.types.includes(T.ContactSensor), 'button sensor removed')
+      assert.ok(asCamera.types.includes(T.CameraRTPStreamManagement) && asCamera.types.includes(T.MotionSensor))
+      assert.ok((await services('Front Doorbell')).types.includes(T.Doorbell), 'name-based doorbell unchanged')
+      hb2.assertAlive()
+      assert.ok(!FATAL_PATTERNS.some((p) => p.test(hb2.log)), hb2.tail(80))
+    })
   })
 })

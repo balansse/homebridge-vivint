@@ -97,6 +97,26 @@ describe('Camera', function () {
     assert.ok(Date.now() - t0 < 10000)
   })
 
+  describe('.isDoorbell (#12, #32)', function () {
+    const cam = (names, id = 70) => ({ id, names })
+    it('detects doorbells by name, as before', function () {
+      assert.strictEqual(Camera.isDoorbell(cam(['Front Doorbell'])), true)
+      assert.strictEqual(Camera.isDoorbell(cam(['DOORBELL cam'])), true)
+      assert.strictEqual(Camera.isDoorbell(cam(['Front Door'])), false)
+      assert.strictEqual(Camera.isDoorbell(cam(['Front Door']), {}), false)
+    })
+
+    it('detects doorbells listed by ID or name in doorbellCameraIds', function () {
+      const config = { doorbellCameraIds: ['71', ' front door ', '', null] }
+      assert.strictEqual(Camera.isDoorbell(cam(['Front Door'], 99), config), true, 'by name, case/space-insensitive')
+      assert.strictEqual(Camera.isDoorbell(cam(['Garage Camera'], 71), config), true, 'by id')
+      assert.strictEqual(Camera.isDoorbell(cam(['Garage Camera'], 72), config), false)
+      assert.strictEqual(Camera.isDoorbell(cam(['Garage Camera'], 71), { doorbellCameraIds: [71] }), true, 'numeric id')
+      assert.strictEqual(Camera.isDoorbell(cam([undefined, 'Front Door'], 5), config), true, 'sanitized name variant')
+      assert.strictEqual(Camera.isDoorbell(cam(['Patio'], 5), { doorbellCameraIds: 'Patio' }), false, 'ignores a non-list value')
+    })
+  })
+
   describe('live streaming (#171, #174, #134)', function () {
     const SRTP_KEY = Buffer.from('0123456789abcdef0123456789abcdef', 'hex')
     const session = () => ({

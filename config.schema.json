@@ -67,6 +67,16 @@
           "description": "Stream camera feeds from Vivint servers instead of streaming directly from the Panel.",
           "type": "boolean"
         },
+        "doorbellCameraIds": {
+          "title": "Doorbell cameras",
+          "description": "Cameras whose name contains 'doorbell' are set up as doorbells automatically. Add the name or ID of any other doorbell camera here (the log lists every camera with its ID on startup) to get ring notifications.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "title": "Camera name or ID",
+            "type": "string"
+          }
+        },
         "videoProcessing": {
           "title": "Camera live view video",
           "description": "'Pass through' sends the camera's video to HomeKit unchanged (the 1.10 behaviour; light on CPU). 'Transcode' re-encodes it at the size HomeKit asks for (1.11 - 1.12 behaviour; CPU-heavy, may be needed for viewing away from home / over cellular).",
